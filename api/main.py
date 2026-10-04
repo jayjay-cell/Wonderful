@@ -1,19 +1,25 @@
 """FastAPI app -- the HTTP boundary.
 
-The UI talks to this over HTTP only and never imports the agent, so the
-layering holds at the deployment boundary too, not just in the source tree.
+The UI talks to this over HTTP only and never imports the domain layer, so
+the layering holds at the deployment boundary too.
 
-TRANSPORT: Server-Sent Events. A delivery plan is a timed sequence of
-events pushed by the server -- typing indicator, chunk, pause, tone shift
--- which is exactly what SSE is for. A single JSON response would collapse
-the realism layer back into one instant blob, and WebSockets would add
-bidirectional machinery for a stream that only flows one way. Phase 2
-replaces the SSE transport with a WebRTC data channel beside the audio;
-the EVENT shapes stay the same, which is the point.
+LIFECYCLE IS EXPLICIT, which is the point of the endpoint set:
 
-load_dotenv() runs before any module reads os.environ: uvicorn does not
-load .env itself, so a key present in the file but unread is an easy and
-confusing failure.
+    POST /sessions              prepare (loads the three sources, t stays 0)
+    POST /sessions/{id}/start   begin, alongside the trainer's video start
+    POST /sessions/{id}/pause   freeze mission time
+    POST /sessions/{id}/resume
+    POST /sessions/{id}/end
+
+Preparation takes time -- validating a timeline, connecting a voice socket
+-- and if the clock ran during it, that setup would silently become
+mission time and the exercise would already be out of step with the video
+before the trainer pressed play.
+
+ONE DOMAIN LOOP PER SESSION. The Session owns it; a voice socket attaches
+a channel rather than starting its own. The previous version let the SSE
+stream and the Gemini Live bridge each run a trigger loop against one
+engine, so a once-only event could fire twice.
 """
 
 from __future__ import annotations
@@ -35,97 +41,81 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import JSONResponse, StreamingResponse  # noqa: E402
 
 from api.schemas import (  # noqa: E402
-    ComposingRequest,
     MessageRequest,
     SessionCreated,
+    SharedContextRequest,
     StartSessionRequest,
 )
 from api.store import SqliteSessionStore  # noqa: E402
-from core.mission import MissionError, load_mission  # noqa: E402
+from core.lifecycle import ExerciseClock, LifecycleError  # noqa: E402
+from core.mission import MissionError, load_context, load_mission  # noqa: E402
+from core.timeline_import import TimelineError, load_timeline  # noqa: E402
 from obs.logging import configure as configure_logging, get_logger  # noqa: E402
-from providers.base import (  # noqa: E402
-    ProviderError,
-    build_llm_provider,
-    build_stt_provider,
-    build_tts_provider,
-)
-from sim.runner import SessionRunner  # noqa: E402
+from providers.base import ProviderError, build_llm_provider  # noqa: E402
+from sim.exercise import Exercise, Utterance  # noqa: E402
+from sim.session import Session  # noqa: E402
+from sim.turns import TurnRunner  # noqa: E402
 
 configure_logging()
 logger = get_logger("api.main")
 
-app = FastAPI(title="Maslul — conversation training simulator")
+app = FastAPI(title="Maslul — Hebrew conversation training counterpart")
 
 app.add_middleware(
     CORSMiddleware,
-    # Single-user local deployment. FLAGGED as a to-revisit item: this is
-    # deliberately permissive for localhost development and must be
-    # tightened before the app is reachable beyond this machine.
+    # Single-trainer local deployment. FLAGGED: tighten before this is
+    # reachable beyond localhost.
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-MISSIONS_DIR = Path(__file__).resolve().parent.parent / "missions"
+ROOT = Path(__file__).resolve().parent.parent
+MISSIONS = ROOT / "missions"
+TIMELINES = ROOT / "timelines"
+CONTEXT = ROOT / "context"
+
 store = SqliteSessionStore()
 
 # Live sessions, in memory. Documented prototype limitation: a process
-# restart ends any running session. The schema already permits rehydration
-# from the last snapshot, so this is upgradeable without touching the
-# layers above.
-_runners: dict[str, "LiveSession"] = {}
+# restart ends any running exercise.
+_sessions: dict[str, "LiveSession"] = {}
 
 
 class LiveSession:
-    """A runner plus the queue its SSE stream drains.
+    """A Session plus the queue its SSE stream drains.
 
-    The queue exists because delivery events are produced by the runner's
-    own task (a trigger may fire with no HTTP request in flight) and
-    consumed by whichever stream is open. Without it, self-initiated
-    utterances could only be delivered while the trainee happened to be
-    waiting on a response.
+    The queue exists because utterances are produced by the session's own
+    loops -- a report can fire with no HTTP request in flight -- and
+    consumed by whichever stream is open.
     """
 
-    def __init__(self, runner: SessionRunner, mission: Any) -> None:
-        self.runner = runner
+    def __init__(self, session: Session | None, mission: Any) -> None:
+        self.session = session
         self.mission = mission
         self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-        self.tick_task: asyncio.Task | None = None
 
-        # Which transport owns the domain loop for this session.
-        #
-        # EXACTLY ONE loop may evaluate triggers, because every loop bumps
-        # the same log.fired_counts and applies effects to the same engine.
-        # Two loops meant a `once: true` trigger was consumed by whichever
-        # saw it first, or fired twice -- once spoken by Gemini Live and
-        # once delivered as SSE text by the text agent, which also made its
-        # own model call. The UI opens the SSE stream for every mode, so
-        # this happened on every Live session.
-        self.domain_owner: str | None = None
+    async def emit(self, payload: dict[str, Any]) -> None:
+        await self.queue.put(payload)
 
-
-class QueueChannel:
-    """DeliveryChannel that funnels events into a session's queue."""
-
-    def __init__(self, live: LiveSession) -> None:
-        self._live = live
-        from delivery.text_channel import TextChannel
-        self._text = TextChannel(self._put)
-
-    async def _put(self, event: dict[str, Any]) -> None:
-        await self._live.queue.put(event)
-
-    async def on_event(self, event: Any) -> None:
-        await self._text.on_event(event)
+    def on_utterance(self, utterance: Utterance) -> Any:
+        return self.emit({
+            "type": "utterance",
+            "speaker": utterance.speaker,
+            "text": utterance.text,
+            "origin": utterance.origin,
+            "event_id": utterance.event_id,
+            "mission_seconds": round(utterance.at, 1),
+        })
 
 
 # -- error handling --------------------------------------------------------
 
 
 @app.exception_handler(Exception)
-async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """FR-G4: a generic message plus a request id to the client; the real
-    exception is logged server-side only, so no internal detail escapes."""
+async def unhandled(request: Request, exc: Exception) -> JSONResponse:
+    """A generic message plus a request id; the real exception is logged
+    server-side only, so no internal detail escapes."""
     request_id = uuid.uuid4().hex[:12]
     logger.exception("api.unhandled", request_id=request_id,
                      error_code=type(exc).__name__, status="error")
@@ -136,50 +126,56 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 
-# -- endpoints -------------------------------------------------------------
+# -- discovery -------------------------------------------------------------
 
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
-    return {"status": "ok", "live_sessions": len(_runners)}
+    return {"status": "ok", "sessions": len(_sessions)}
 
 
 @app.get("/missions")
 async def list_missions() -> dict[str, Any]:
-    """Available missions, with load errors surfaced rather than hidden.
+    """Available exercises, with load errors surfaced.
 
-    A mission that fails to load is reported WITH its error, so a typo is
-    visible in the UI instead of the file silently disappearing from the
-    list.
+    A mission that fails to load is reported WITH its error rather than
+    vanishing from the list, so a typo is visible in the UI.
     """
-    missions = []
-    for path in sorted(MISSIONS_DIR.glob("*.yaml")):
+    out = []
+    for path in sorted(MISSIONS.glob("*.yaml")):
         try:
             mission = load_mission(path)
-            missions.append({
+            out.append({
                 "file": path.name, "id": mission.id, "title": mission.title,
                 "language": mission.language,
-                "trainee_role": mission.setting.trainee_role,
-                "briefing": mission.setting.briefing,
-                "counterpart": mission.persona.name,
-                "trainee_callsign": mission.procedure.callsigns.trainee,
+                "trainee_callsign": mission.callsigns.trainee,
+                "operator_callsign": mission.callsigns.operator,
+                "trainee_briefing": mission.setting.trainee_briefing,
+                "duration_seconds": mission.duration_seconds,
             })
         except MissionError as err:
-            missions.append({"file": path.name, "error": str(err)})
-    return {"missions": missions}
+            out.append({"file": path.name, "error": str(err)})
+    return {"missions": out}
+
+
+# -- lifecycle -------------------------------------------------------------
 
 
 @app.post("/sessions", response_model=SessionCreated)
-async def start_session(request: StartSessionRequest) -> SessionCreated:
-    path = MISSIONS_DIR / request.mission_file
-    # Resolve and contain: a mission_file of "../../etc/passwd" must not
-    # escape the missions directory.
-    if not path.resolve().is_relative_to(MISSIONS_DIR.resolve()):
+async def prepare_session(request: StartSessionRequest) -> SessionCreated:
+    """Load the three sources and prepare. The clock does NOT start."""
+    path = MISSIONS / request.mission_file
+    # Resolve and contain: "../../etc/passwd" must not escape missions/.
+    if not path.resolve().is_relative_to(MISSIONS.resolve()):
         raise HTTPException(status_code=400, detail="invalid mission file")
 
     try:
         mission = load_mission(path)
-    except MissionError as err:
+        if not mission.timeline_file:
+            raise MissionError("NO_TIMELINE", "mission has no timeline_file")
+        timeline = load_timeline(TIMELINES / mission.timeline_file)
+        context = load_context(mission.context_files, CONTEXT)
+    except (MissionError, TimelineError) as err:
         raise HTTPException(status_code=400, detail=str(err)) from err
 
     try:
@@ -187,304 +183,185 @@ async def start_session(request: StartSessionRequest) -> SessionCreated:
     except ProviderError as err:
         raise HTTPException(status_code=503, detail=str(err)) from err
 
-    # Server-generated and unguessable: a client can only resume a session
-    # id the server handed it.
+    # Server-generated and unguessable: a client can only resume an id the
+    # server handed it.
     session_id = secrets.token_urlsafe(16)
-    live = LiveSession(None, mission)  # type: ignore[arg-type]
-    runner = SessionRunner(
-        mission, model, QueueChannel(live), session_id=session_id,
-        delivery_speed=request.delivery_speed, seed=request.seed,
+
+    exercise = Exercise(
+        mission, timeline, model, context=context,
+        session_id=session_id, clock=ExerciseClock(),
     )
-    live.runner = runner
-    _runners[session_id] = live
+    turns = TurnRunner(exercise, model,
+                       for_speech=request.channel == "gemini_live")
+
+    live = LiveSession(None, mission)
+    session = Session(exercise, turns, store=store, channel=request.channel,
+                      on_utterance=live.on_utterance)
+    live.session = session
+    _sessions[session_id] = live
 
     store.create_session(
         session_id=session_id, mission_id=mission.id,
         mission_version=mission.version, mission_title=mission.title,
-        realism_seed=runner.seed,
+        channel=request.channel,
         started_at=datetime.now(timezone.utc).isoformat(),
     )
+    await session.prepare()
 
-    logger.info("session.created", session_id=session_id, mission_id=mission.id)
+    logger.info("session.prepared", session_id=session_id, mission_id=mission.id)
     return SessionCreated(
         session_id=session_id, mission_id=mission.id, title=mission.title,
-        counterpart=mission.persona.name,
-        trainee_callsign=mission.procedure.callsigns.trainee,
-        counterpart_callsign=mission.procedure.callsigns.counterpart,
-        briefing=mission.setting.briefing,
+        operator_callsign=mission.callsigns.operator,
+        trainee_callsign=mission.callsigns.trainee,
+        controller_callsign=mission.callsigns.controller,
+        trainee_briefing=mission.setting.trainee_briefing,
         language=mission.language,
+        duration_seconds=mission.duration_seconds or timeline.duration,
+        phase=session.phase.value,
     )
+
+
+def _live(session_id: str) -> LiveSession:
+    live = _sessions.get(session_id)
+    if live is None:
+        raise HTTPException(status_code=404, detail="no such session")
+    return live
+
+
+@app.post("/sessions/{session_id}/start")
+async def start_exercise(session_id: str) -> dict[str, Any]:
+    """Begin the exercise. The trainer starts the video at this moment."""
+    live = _live(session_id)
+    try:
+        await live.session.start()
+    except LifecycleError as err:
+        raise HTTPException(status_code=409, detail=str(err)) from err
+    await live.emit({"type": "started"})
+    return {"phase": live.session.phase.value}
+
+
+@app.post("/sessions/{session_id}/pause")
+async def pause_exercise(session_id: str) -> dict[str, Any]:
+    live = _live(session_id)
+    try:
+        await live.session.pause()
+    except LifecycleError as err:
+        raise HTTPException(status_code=409, detail=str(err)) from err
+    await live.emit({"type": "paused"})
+    return {"phase": live.session.phase.value}
+
+
+@app.post("/sessions/{session_id}/resume")
+async def resume_exercise(session_id: str) -> dict[str, Any]:
+    live = _live(session_id)
+    try:
+        await live.session.resume()
+    except LifecycleError as err:
+        raise HTTPException(status_code=409, detail=str(err)) from err
+    await live.emit({"type": "resumed"})
+    return {"phase": live.session.phase.value}
+
+
+@app.post("/sessions/{session_id}/end")
+async def end_exercise(session_id: str) -> dict[str, Any]:
+    live = _sessions.pop(session_id, None)
+    if live is None:
+        raise HTTPException(status_code=404, detail="no such session")
+    await live.session.end()
+    await live.emit({"type": "ended"})
+    logger.info("session.ended", session_id=session_id)
+    return {"phase": live.session.phase.value}
+
+
+# -- conversation ----------------------------------------------------------
+
+
+@app.post("/sessions/{session_id}/messages")
+async def send_message(session_id: str, request: MessageRequest) -> dict[str, Any]:
+    live = _live(session_id)
+    if not live.session.exercise.clock.is_running:
+        raise HTTPException(status_code=409,
+                            detail=f"exercise is {live.session.phase.value}")
+    await live.session.trainee_says(request.text)
+    return {"ok": True}
+
+
+@app.post("/sessions/{session_id}/shared")
+async def share_context(session_id: str,
+                        request: SharedContextRequest) -> dict[str, Any]:
+    """Record context the trainee passed to the crew."""
+    live = _live(session_id)
+    live.session.note_shared(request.fact)
+    return {"ok": True}
 
 
 @app.get("/sessions/{session_id}/stream")
 async def stream(session_id: str) -> StreamingResponse:
-    """SSE stream of delivery events, plus the trigger tick loop.
+    """SSE stream of utterances and lifecycle events.
 
-    The tick loop runs HERE rather than at session creation so triggers
-    only fire while someone is actually listening -- otherwise a session
-    left open in a closed tab would keep generating model calls.
+    Does NOT start a domain loop -- the Session owns that, and starting
+    one here is how the previous version ended up with two.
     """
-    live = _runners.get(session_id)
-    if live is None:
-        raise HTTPException(status_code=404, detail="no such session")
+    live = _live(session_id)
 
-    # Gemini Live runs the domain loop inside its own bridge, so the SSE
-    # stream must NOT start a second one. It still streams delivery events
-    # and serves the readings panel -- it just does not drive triggers.
-    if live.domain_owner in (None, "sse"):
-        live.domain_owner = "sse"
-        if live.tick_task is None or live.tick_task.done():
-            live.tick_task = asyncio.create_task(_tick_loop(live))
-
-    async def event_source():
+    async def source():
         try:
-            # An immediate event so the client knows the stream is open
-            # rather than waiting for the first trigger.
-            yield _sse({"type": "connected", "session_id": session_id})
+            yield _sse({"type": "connected", "session_id": session_id,
+                        "phase": live.session.phase.value})
             while True:
                 try:
                     event = await asyncio.wait_for(live.queue.get(), timeout=15.0)
                     yield _sse(event)
                 except asyncio.TimeoutError:
-                    # A keepalive comment: proxies and browsers drop an
-                    # idle SSE connection, and an idle session is normal
-                    # here while the trainee is reading.
+                    # Keepalive: proxies and browsers drop an idle SSE
+                    # connection, and an idle exercise is normal.
                     yield ": keepalive\n\n"
         except asyncio.CancelledError:
             raise
 
     return StreamingResponse(
-        event_source(),
-        media_type="text/event-stream",
+        source(), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
-@app.post("/sessions/{session_id}/messages")
-async def send_message(session_id: str, request: MessageRequest) -> dict[str, Any]:
-    """A trainee transmission. Interrupts anything in flight."""
-    live = _runners.get(session_id)
-    if live is None:
-        raise HTTPException(status_code=404, detail="no such session")
-
-    runner = live.runner
-    mission_seconds = runner.clock.now()
-    store.add_trainee_message(session_id, request.text, mission_seconds)
-
-    record = await runner.handle_trainee_message(request.text)
-    if record is not None:
-        _persist_utterance(session_id, runner, record)
-    return {"ok": True}
-
-
-@app.post("/sessions/{session_id}/composing")
-async def set_composing(session_id: str, request: ComposingRequest) -> dict[str, Any]:
-    """The trainee started or stopped typing.
-
-    Feeds the composition-window guard: non-critical initiative waits
-    while they are mid-sentence. In voice this same signal comes from VAD.
-    """
-    live = _runners.get(session_id)
-    if live is None:
-        raise HTTPException(status_code=404, detail="no such session")
-    live.runner.set_composing(request.composing)
-    return {"ok": True}
-
-
-@app.post("/sessions/{session_id}/interrupt")
-async def interrupt(session_id: str) -> dict[str, Any]:
-    """Cut the counterpart off mid-transmission."""
-    live = _runners.get(session_id)
-    if live is None:
-        raise HTTPException(status_code=404, detail="no such session")
-    live.runner.interrupt()
-    return {"ok": True}
-
-
 @app.get("/sessions/{session_id}/state")
 async def session_state(session_id: str) -> dict[str, Any]:
-    """The trainer's view: FULL state, including what the counterpart
-    cannot see. You need to know what he does not in order to judge
-    whether his answers were honest."""
-    live = _runners.get(session_id)
-    if live is None:
-        raise HTTPException(status_code=404, detail="no such session")
+    """The TRAINER's view.
 
-    runner = live.runner
-    runner.session.engine.advance_to(runner.clock.now())
-    visible = set(runner.session.engine.snapshot(for_persona=True))
+    Includes the private solution and what is still unrevealed: judging
+    whether the crew answered honestly requires knowing what it could not
+    see. Never sent to the model.
+    """
+    live = _live(session_id)
+    exercise = live.session.exercise
+    mission = exercise.mission
 
     return {
-        "mission_seconds": runner.clock.now(),
-        # Surfaced so the console can show the trainer that mission time
-        # is compressed -- otherwise a fast-moving clock looks like a bug.
-        "mission_speed": getattr(runner.clock, "multiplier", 1.0),
-        "readings": [
-            {**row, "hidden_from_counterpart": row["id"] not in visible}
-            for row in runner.session.engine.describe_for_prompt(for_persona=False)
+        "phase": exercise.phase.value,
+        "mission_seconds": round(exercise.clock.now(), 1),
+        "duration_seconds": exercise.clock.duration,
+        "operator_facts": exercise.current_information(),
+        "observations": exercise.revealed_observations(),
+        "commitments": [
+            {"commitment_id": c.commitment_id, "tags": list(c.tags),
+             "entity_ids": list(c.entity_ids), "description": c.description}
+            for c in exercise.ledger.active
         ],
-        "fired": dict(runner.log.fired_counts),
-        "tone": runner._current_tone(),
+        "reports_owed": [p.event.event_id for p in exercise.pending_reports()],
+        "handover_active": exercise.handover_active() is not None,
+        "contact_established": exercise.state.contact_established,
+        "briefing_stage": exercise.state.briefing_stage.value,
+        "shared_by_trainee": exercise.state.shared_by_trainee,
+        # Trainer only.
+        "private": {
+            "solution": mission.private.solution,
+            "debrief_points": mission.private.debrief_points,
+        },
     }
 
 
-@app.post("/sessions/{session_id}/end")
-async def end_session(session_id: str) -> dict[str, Any]:
-    live = _runners.pop(session_id, None)
-    if live is None:
-        raise HTTPException(status_code=404, detail="no such session")
-    live.runner.stop()
-    if live.tick_task is not None:
-        live.tick_task.cancel()
-    store.end_session(session_id, "completed")
-    logger.info("session.ended", session_id=session_id)
-    return {"ok": True}
-
-
-# -- voice ----------------------------------------------------------------
-
-
-@app.websocket("/sessions/{session_id}/voice")
-async def voice_socket(socket: WebSocket, session_id: str) -> None:
-    """Browser audio in, counterpart audio out, over one socket.
-
-    ONE socket for both directions, with binary frames for PCM and text
-    frames for control. A separate control socket could desynchronize from
-    the audio, which matters because an interrupt must be ordered relative
-    to the audio around it.
-
-    Attaching a voice socket REPLACES the session's delivery channel, so
-    the counterpart speaks instead of streaming text. Everything upstream
-    -- the agent, the tools, the mission state, the realism plan -- is
-    unchanged; this is the seam the architecture was shaped around.
-    """
-    await socket.accept()
-
-    live = _runners.get(session_id)
-    if live is None:
-        await socket.send_text(json.dumps({"type": "error",
-                                           "message": "no such session"}))
-        await socket.close()
-        return
-
-    from api.voice import VoiceBridge
-    from delivery.voice_channel import VoiceChannel
-
-    try:
-        stt = build_stt_provider(live.mission)
-        tts = build_tts_provider(live.mission)
-    except ProviderError as err:
-        await socket.send_text(json.dumps({"type": "error", "message": str(err)}))
-        await socket.close()
-        return
-
-    bridge = VoiceBridge(socket, live, live.mission)
-
-    # Swap text delivery for audio delivery. Kept so it can be restored:
-    # a trainer may close the voice tab and carry on in text.
-    previous_channel = live.runner.channel
-    live.runner.channel = VoiceChannel(
-        tts=tts, emit_audio=bridge.send_audio, emit_event=bridge.send_event,
-    )
-
-    # Voice pacing: the plan's speech durations must reflect real speaking
-    # rate rather than the fast text rate.
-    live.runner.for_voice = True
-
-    if live.tick_task is None or live.tick_task.done():
-        live.tick_task = asyncio.create_task(_tick_loop(live))
-
-    logger.info("voice.connected", session_id=session_id)
-    await socket.send_text(json.dumps({
-        "type": "voice_ready",
-        "sample_rate": 16000,
-        "language": live.mission.language,
-    }))
-
-    try:
-        await bridge.run(stt)
-    finally:
-        live.runner.channel = previous_channel
-        live.runner.for_voice = False
-        logger.info("voice.disconnected", session_id=session_id)
-
-
-@app.websocket("/sessions/{session_id}/live")
-async def live_voice_socket(socket: WebSocket, session_id: str) -> None:
-    """Gemini Live: native Hebrew speech-to-speech.
-
-    The alternative to /voice's cascade. Uses the GEMINI_API_KEY already
-    configured, so it needs no second vendor -- which makes it the quickest
-    way to answer "is Hebrew voice viable at all?" before committing to a
-    paid STT/TTS stack.
-
-    Measured on this project: ~1.3s to first Hebrew audio, and it DOES call
-    read_state before quoting a figure, so the mission-state guarantee
-    survives. What it gives up is the realism layer: Gemini Live owns its
-    own pauses, so there are no controlled stalls (see
-    providers/cloud/gemini_live.py).
-    """
-    await socket.accept()
-
-    live = _runners.get(session_id)
-    if live is None:
-        await socket.send_text(json.dumps({"type": "error",
-                                           "message": "no such session"}))
-        await socket.close()
-        return
-
-    from agent.prompts import build_system_prompt
-    from api.live_voice import LiveVoiceBridge
-    from providers.cloud.gemini_live import GeminiLiveProvider
-
-    try:
-        provider = GeminiLiveProvider(language=live.mission.language)
-        provider._require_key()
-    except ProviderError as err:
-        await socket.send_text(json.dumps({"type": "error", "message": str(err)}))
-        await socket.close()
-        return
-
-    runner = live.runner
-    runner.session.engine.advance_to(runner.clock.now())
-
-    # The SAME prompt the text agent uses, minus the marker vocabulary.
-    # Live controls its own prosody, and an earlier attempt to merely strip
-    # the guillemets left the bare word behind -- it said "hesitate" aloud.
-    prompt = build_system_prompt(live.mission, runner.session.engine,
-                                 with_markers=False, for_speech=True)
-
-    # Claim the domain loop. The UI opens the SSE stream for every mode,
-    # so by the time this socket connects the text tick loop is usually
-    # already running -- and it would keep evaluating triggers, applying
-    # effects and making its own model calls against the same engine.
-    # Cancelling it is what makes "exactly one domain loop" true rather
-    # than merely intended.
-    live.domain_owner = "live_voice"
-    if live.tick_task is not None and not live.tick_task.done():
-        live.tick_task.cancel()
-        try:
-            await live.tick_task
-        except (asyncio.CancelledError, Exception):
-            pass
-        live.tick_task = None
-        logger.info("live_voice.took_domain_loop", session_id=session_id)
-
-    bridge = LiveVoiceBridge(socket, live, live.mission)
-    logger.info("live_voice.connected", session_id=session_id)
-    try:
-        await bridge.run(provider, prompt)
-    except Exception as err:
-        logger.exception("live_voice.failed", session_id=session_id,
-                         error_code=type(err).__name__, status="error")
-    finally:
-        # Release the loop so a reconnect (or a switch back to text) can
-        # claim it again.
-        live.domain_owner = None
-        logger.info("live_voice.disconnected", session_id=session_id)
-
-
-# -- review ---------------------------------------------------------------
+# -- review ----------------------------------------------------------------
 
 
 @app.get("/sessions")
@@ -494,11 +371,10 @@ async def list_sessions() -> dict[str, Any]:
 
 @app.get("/sessions/{session_id}/review")
 async def review(session_id: str) -> dict[str, Any]:
-    """Everything a debrief needs, including what was WITHHELD.
+    """Everything a debrief needs, for any channel.
 
-    Suppressed firings are included deliberately: "why didn't he warn me
-    about the fuel?" is unanswerable if the absence of an event left no
-    trace.
+    Voice sessions previously returned an empty transcript -- neither
+    voice path persisted anything -- which made them undebriefable.
     """
     record = store.session(session_id)
     if record is None:
@@ -506,75 +382,55 @@ async def review(session_id: str) -> dict[str, Any]:
     return {
         "session": record,
         "transcript": store.transcript(session_id),
-        "firings": store.firings(session_id),
-        "snapshots": store.snapshots(session_id),
+        "revealed": store.revealed(session_id),
+        "agreements": store.agreements(session_id),
     }
 
 
-# -- internals ------------------------------------------------------------
+# -- voice -----------------------------------------------------------------
 
 
-async def _tick_loop(live: LiveSession) -> None:
-    """Evaluate triggers while a stream is attached."""
-    from sim.runner import TICK_SECONDS
+@app.websocket("/sessions/{session_id}/voice")
+async def voice_socket(socket: WebSocket, session_id: str) -> None:
+    """ElevenLabs cascade: STT -> shared domain layer -> TTS."""
+    await socket.accept()
+    live = _sessions.get(session_id)
+    if live is None:
+        await socket.send_text(json.dumps({"type": "error",
+                                           "message": "no such session"}))
+        await socket.close()
+        return
 
-    runner = live.runner
-    limit = runner.mission.limits.session_max_minutes * 60
+    from api.voice import run_cascade
     try:
-        while runner.clock.now() < limit:
-            record = await runner.tick()
-            if record is not None:
-                _persist_utterance(runner.session_id, runner, record)
-            _drain_suppressions(runner)
-            await asyncio.sleep(TICK_SECONDS)
-    except asyncio.CancelledError:
-        raise
+        await run_cascade(socket, live)
     except Exception as err:
-        # A tick-loop failure must not take the session down silently --
-        # the trainee would see a counterpart that simply stopped
-        # initiating, with no indication why.
-        logger.exception("tick_loop.failed", session_id=runner.session_id,
+        logger.exception("voice.failed", session_id=session_id,
                          error_code=type(err).__name__, status="error")
 
 
-_persisted_suppressions: dict[str, int] = {}
+@app.websocket("/sessions/{session_id}/live")
+async def live_voice_socket(socket: WebSocket, session_id: str) -> None:
+    """Gemini Live: native Hebrew speech-to-speech.
 
-
-def _drain_suppressions(runner: SessionRunner) -> None:
-    """Persist newly recorded suppressions.
-
-    Index-tracked rather than cleared from the runner's log, because the
-    log is also the in-memory source for the live trainer view.
+    Shares the domain layer with every other channel; only audio
+    transport differs. Its prosody and pacing genuinely differ from the
+    cascade's -- that is a real difference, not one to claim away.
     """
-    already = _persisted_suppressions.get(runner.session_id, 0)
-    pending = runner.log.suppressions[already:]
-    for mission_seconds, suppression in pending:
-        store.add_trigger_firing(
-            runner.session_id, suppression.trigger_id, mission_seconds,
-            suppressed=True, reason=suppression.reason,
-        )
-    _persisted_suppressions[runner.session_id] = len(runner.log.suppressions)
+    await socket.accept()
+    live = _sessions.get(session_id)
+    if live is None:
+        await socket.send_text(json.dumps({"type": "error",
+                                           "message": "no such session"}))
+        await socket.close()
+        return
 
-
-def _persist_utterance(session_id: str, runner: SessionRunner, record: Any) -> None:
-    store.add_utterance(
-        session_id, text=record.text, origin=record.origin,
-        mission_seconds=record.mission_seconds, status=record.status,
-        plan_id=record.plan_id, turn_id=record.turn_id,
-        trigger_id=record.trigger_id, planned_text=record.planned_text,
-        delivered_segments=record.delivered_segments,
-        total_segments=record.total_segments,
-    )
-    if record.trigger_id:
-        store.add_trigger_firing(
-            session_id, record.trigger_id, record.mission_seconds,
-            suppressed=False, reason=None,
-        )
-    store.add_snapshot(
-        session_id, record.mission_seconds,
-        runner.session.engine.snapshot(for_persona=False),
-        cause=f"trigger:{record.trigger_id}" if record.trigger_id else "turn",
-    )
+    from api.live_voice import run_live
+    try:
+        await run_live(socket, live)
+    except Exception as err:
+        logger.exception("live_voice.failed", session_id=session_id,
+                         error_code=type(err).__name__, status="error")
 
 
 def _sse(payload: dict[str, Any]) -> str:

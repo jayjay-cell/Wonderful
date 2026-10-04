@@ -1,32 +1,13 @@
-"""Voice WebSocket: browser audio in, counterpart audio out.
+"""ElevenLabs cascade: STT -> shared domain layer -> TTS.
 
-ONE socket carries both directions. Binary frames are PCM audio; text
-frames are JSON control messages. A second socket for control would need
-its own lifecycle and could desynchronize from the audio, which matters
-because an interrupt must be ordered relative to the audio around it.
+The other voice transport. Unlike Gemini Live it keeps the realism
+layer's pacing, because the text is produced before it is spoken -- so
+authored stalls and the response delay apply. That is the real difference
+between the two paths, and it is why both are kept.
 
-THE LATENCY PATH, and where each millisecond goes:
-
-    browser mic
-      -> PCM frames (20ms each)           ~20ms
-      -> turn detection                   <1ms  (energy VAD, local)
-      -> Scribe v2 Realtime STT          ~150ms
-      -> [turn considered over]           420-900ms  (silence threshold)
-      -> agent + tools + mission state   ~1000ms
-      -> realism plan                     <1ms
-      -> ElevenLabs Flash v2.5 TTS       ~250ms to first audio byte
-      -> browser speaker
-
-The silence threshold and the model call dominate. Both are already as
-tuned as they can be without changing what the product is: the threshold
-adapts to transcript shape (sim/turn_detection.py), and the model is the
-fastest one measured at equal quality.
-
-What CANNOT be optimised away is the persona's own delay -- and should not
-be, because an operator who replies the instant you stop talking is the
-single clearest tell that there is no person there. The realism lead-in
-absorbs the model's latency rather than adding to it (see
-sim/runner.py), so real cost hides inside modelled hesitation.
+This file owns only transport: microphone framing, turn detection, and
+pushing synthesized audio back. Facts, commitments, handover, lifecycle
+and persistence all come from sim/session.py.
 """
 
 from __future__ import annotations
@@ -42,70 +23,80 @@ from sim.turn_detection import TurnDetector, TurnState
 
 logger = get_logger("api.voice")
 
-# 20ms of 16kHz mono PCM. Small enough that barge-in detection is prompt,
-# large enough that per-frame overhead stays irrelevant.
-FRAME_BYTES = 640
+
+async def run_cascade(socket: WebSocket, live: Any) -> None:
+    """Attach an ElevenLabs cascade socket to a prepared session."""
+    from providers.base import ProviderError, build_stt_provider, build_tts_provider
+
+    exercise = live.session.exercise
+
+    try:
+        stt = build_stt_provider(exercise.mission)
+        tts = build_tts_provider(exercise.mission)
+    except ProviderError as err:
+        await socket.send_text(json.dumps({"type": "error", "message": str(err)}))
+        await socket.close()
+        return
+
+    bridge = CascadeBridge(socket, live, tts)
+    await socket.send_text(json.dumps({
+        "type": "voice_ready", "mode": "elevenlabs",
+        "input_sample_rate": 16000, "output_sample_rate": 16000,
+        "language": exercise.mission.language,
+    }))
+
+    logger.info("voice.connected", session_id=exercise.session_id)
+    try:
+        await bridge.run(stt)
+    finally:
+        logger.info("voice.disconnected", session_id=exercise.session_id)
 
 
-class VoiceBridge:
-    """Connects one browser audio socket to one live session.
+class CascadeBridge:
+    """Microphone in, synthesized speech out."""
 
-    Three concurrent concerns, each its own task because they have
-    independent rhythms: receiving microphone audio (fixed clock),
-    transcribing (bursty), and delivering the counterpart's audio
-    (driven by the delivery plan). Interleaving them in one loop would
-    make each wait on the others.
-    """
-
-    def __init__(self, socket: WebSocket, live: Any, mission: Any) -> None:
+    def __init__(self, socket: WebSocket, live: Any, tts: Any) -> None:
         self.socket = socket
         self.live = live
-        self.runner = live.runner
-        self.mission = mission
+        self.session = live.session
+        self.exercise = live.session.exercise
+        self.tts = tts
 
         self.detector = TurnDetector()
         self._mic: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=200)
         self._stopped = asyncio.Event()
         self._turn_in_flight = False
 
-    # -- outbound ---------------------------------------------------------
+        # The session speaks through us, so utterances it produces -- a
+        # report, a briefing request -- reach the speaker too.
+        self._previous_hook = self.session.on_utterance
+        self.session.on_utterance = self._on_utterance
 
-    async def send_audio(self, pcm: bytes, kind: str) -> None:
-        """Send counterpart audio, or a control frame, to the browser."""
+    # -- run --------------------------------------------------------------
+
+    async def run(self, stt: Any) -> None:
+        tasks = [
+            asyncio.create_task(self._from_browser()),
+            asyncio.create_task(self._transcribe(stt)),
+        ]
         try:
-            if kind == "interrupt":
-                # Text frame, not binary: the client must DISCARD its
-                # buffer. Sending nothing would leave queued audio playing
-                # after he was cut off -- the exact talk-over the design
-                # forbids.
-                await self.socket.send_text(json.dumps({"type": "flush_audio"}))
-                return
-            if pcm:
-                await self.socket.send_bytes(pcm)
-        except Exception:
-            self._stopped.set()
+            await self._stopped.wait()
+        finally:
+            self.session.on_utterance = self._previous_hook
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def send_event(self, payload: dict[str, Any]) -> None:
-        try:
-            await self.socket.send_text(json.dumps(payload, ensure_ascii=False))
-        except Exception:
-            self._stopped.set()
-
-    # -- inbound ----------------------------------------------------------
-
-    async def receive_loop(self) -> None:
-        """Read frames from the browser until it disconnects."""
+    async def _from_browser(self) -> None:
         try:
             while not self._stopped.is_set():
                 message = await self.socket.receive()
-
                 if message.get("type") == "websocket.disconnect":
                     break
-
-                if (data := message.get("bytes")) is not None:
-                    await self._on_audio(data)
+                if (pcm := message.get("bytes")) is not None:
+                    await self._on_audio(pcm)
                 elif (text := message.get("text")) is not None:
-                    await self._on_control(json.loads(text))
+                    await self._control(json.loads(text))
         except (WebSocketDisconnect, RuntimeError):
             pass
         finally:
@@ -114,50 +105,35 @@ class VoiceBridge:
 
     async def _on_audio(self, pcm: bytes) -> None:
         """Handle one microphone frame: detect turns, forward to STT."""
-        self.detector.set_counterpart_speaking(self.runner.is_delivering)
+        self.detector.set_counterpart_speaking(self._turn_in_flight)
         state, barge_in = self.detector.feed(pcm)
 
         if barge_in:
             # Immediate, before any transcript exists. Waiting to know
-            # WHAT was said would let him talk over the trainee for a full
-            # second -- detecting that someone started is a separate and
-            # much faster question than knowing what they said.
-            self.runner.interrupt()
-            await self.send_event({"type": "barge_in"})
-
-        if state is TurnState.TRAINEE_SPEAKING:
-            # Feeds the suppression guard: non-critical initiative waits
-            # while the trainee holds the net. Same predicate the text UI
-            # drives from its typing indicator.
-            self.runner.set_composing(True)
+            # WHAT was said would let the operator talk over the trainee
+            # for a full second.
+            await self._event({"type": "barge_in"})
 
         try:
             self._mic.put_nowait(pcm)
         except asyncio.QueueFull:
-            # Drop the oldest frame rather than blocking the socket: a
-            # backed-up queue means STT has stalled, and old audio is
-            # worth less than staying responsive.
+            # Drop the oldest rather than block the socket: a backed-up
+            # queue means STT stalled, and old audio is worth less than
+            # staying responsive.
             try:
                 self._mic.get_nowait()
                 self._mic.put_nowait(pcm)
             except Exception:
                 pass
 
-    async def _on_control(self, message: dict[str, Any]) -> None:
+    async def _control(self, message: dict[str, Any]) -> None:
         kind = message.get("type")
-        if kind == "interrupt":
-            self.runner.interrupt()
-        elif kind == "text":
-            # A typed transmission during a voice session: useful when a
-            # brevity code is misrecognised and the trainer wants to move on.
-            await self._handle_transmission(str(message.get("text", "")))
+        if kind == "text":
+            await self._transmission(str(message.get("text", "")))
         elif kind == "stop":
             self._stopped.set()
 
-    # -- transcription ----------------------------------------------------
-
-    async def transcribe_loop(self, stt: Any) -> None:
-        """Stream microphone audio to STT and act on finished turns."""
+    async def _transcribe(self, stt: Any) -> None:
         async def audio_source():
             while not self._stopped.is_set():
                 chunk = await self._mic.get()
@@ -169,63 +145,70 @@ class VoiceBridge:
             async for transcript in stt.transcribe_stream(audio_source()):
                 if self._stopped.is_set():
                     return
-
                 if not transcript.is_final:
                     # Interim text steers the silence threshold and shows
                     # the trainee what was heard. Never acted on as
-                    # content -- an interim transcript changes as more
-                    # audio arrives.
+                    # content -- it changes as more audio arrives.
                     self.detector.update_partial(transcript.text)
-                    await self.send_event({
-                        "type": "partial_transcript", "text": transcript.text,
-                    })
+                    await self._event({"type": "partial_transcript",
+                                       "text": transcript.text})
                     continue
 
-                await self.send_event({
-                    "type": "final_transcript", "text": transcript.text,
-                })
-
+                await self._event({"type": "final_transcript",
+                                   "text": transcript.text})
                 if self.detector.state is TurnState.TRAINEE_FINISHED:
-                    await self._handle_transmission(transcript.text)
+                    await self._transmission(transcript.text)
         except Exception as err:
-            logger.error("voice.stt_loop_failed",
-                         error_code=type(err).__name__, status="error")
-            await self.send_event({
-                "type": "error",
-                "message": "התמלול נכשל. אפשר להקליד במקום.",
-            })
+            logger.error("voice.stt_failed", error_code=type(err).__name__,
+                         status="error")
+            await self._event({"type": "error",
+                               "message": "התמלול נכשל. אפשר להקליד."})
 
-    async def _handle_transmission(self, text: str) -> None:
-        """Run one reactive turn from a completed transmission."""
+    async def _transmission(self, text: str) -> None:
+        """Run one turn through the SHARED session."""
         text = text.strip()
         if not text or self._turn_in_flight:
             return
-
         self._turn_in_flight = True
         self.detector.consume_turn()
-        self.runner.set_composing(False)
         try:
-            record = await self.runner.handle_trainee_message(text)
-            if record is not None:
-                await self.send_event({
-                    "type": "turn_complete",
-                    "text": record.text,
-                    "status": record.status,
-                })
+            await self.session.trainee_says(text)
         finally:
             self._turn_in_flight = False
 
-    # -- lifecycle --------------------------------------------------------
+    # -- speaking ---------------------------------------------------------
 
-    async def run(self, stt: Any) -> None:
-        """Run until the browser disconnects."""
-        tasks = [
-            asyncio.create_task(self.receive_loop()),
-            asyncio.create_task(self.transcribe_loop(stt)),
-        ]
+    def _on_utterance(self, utterance: Any) -> Any:
+        """Speak anything the session records from the operator."""
+        if self._previous_hook is not None:
+            maybe = self._previous_hook(utterance)
+            if asyncio.iscoroutine(maybe):
+                asyncio.create_task(maybe)
+        if utterance.speaker != "operator" or not utterance.text.strip():
+            return None
+        return self._speak(utterance.text)
+
+    async def _speak(self, text: str) -> None:
+        """Synthesize and stream one utterance."""
+        from providers.base import VoiceSettings
+
         try:
-            await self._stopped.wait()
-        finally:
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            async for chunk in self.tts.synthesize_stream(
+                text, VoiceSettings(voice_id="")
+            ):
+                if self._stopped.is_set():
+                    return
+                if chunk:
+                    await self.socket.send_bytes(chunk)
+        except Exception as err:
+            # A TTS failure must not end the exercise: the trainee hears a
+            # dropped transmission, which happens on a real net, rather
+            # than the session dying.
+            logger.error("voice.tts_failed", error_code=type(err).__name__,
+                         status="error")
+
+    async def _event(self, payload: dict[str, Any]) -> None:
+        try:
+            await self.socket.send_text(json.dumps(payload, ensure_ascii=False))
+        except Exception:
+            self._stopped.set()

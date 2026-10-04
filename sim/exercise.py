@@ -246,6 +246,14 @@ class Exercise:
             })
         return out
 
+    def pending_reports(self) -> tuple[PendingReport, ...]:
+        """Reports owed but not yet spoken.
+
+        A public accessor so the trainer panel does not reach into a
+        private field -- the previous API read `runner._pending` directly.
+        """
+        return tuple(self._pending)
+
     def handover_active(self) -> TimelineEvent | None:
         return self.timeline.handover_at(self.clock.now())
 

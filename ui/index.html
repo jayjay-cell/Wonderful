@@ -175,6 +175,9 @@ select:hover, input[type=text]:hover { border-color: var(--line-lit); }
 .ico.armed { background: #2a1512; border-color: #4a1f1d; color: var(--red); }
 .send { background: var(--cyan); border-color: var(--cyan);
         color: #06151e; font-weight: 600; }
+.go-ex { background: var(--amber); border-color: var(--amber);
+         color: #161008; font-weight: 600; }
+.go-ex:hover { background: #f0b155; border-color: #f0b155; }
 .send:hover { background: #76c7ee; border-color: #76c7ee; }
 
 /* instrument rail */
@@ -220,18 +223,14 @@ select:hover, input[type=text]:hover { border-color: var(--line-lit); }
       <option value="text">טקסט</option>
     </select>
 
-    <label for="speed">זמן משימה</label>
-    <select id="speed">
-      <option value="1">זמן אמת</option>
-      <option value="10">×10 · דקה ב-6 שניות</option>
-      <option value="60" selected>×60 · דקה בשנייה</option>
-      <option value="120">×120 · שעה בחצי דקה</option>
-    </select>
-    <p class="hint">מאיץ את הדלק, הראות ונקודות הזמן — לא את הדיבור.</p>
+    <p class="hint">
+      הסרטון מתנגן בנגן נפרד. לאחר ההכנה — לחץ "התחל תרגיל" והפעל את
+      הסרטון באותו רגע. השעון מודד זמן מתחילת ההקלטה, בזמן אמת.
+    </p>
 
     <div id="brief" class="brief" hidden></div>
     <div id="fail" class="fail" hidden></div>
-    <button id="go" class="go">התחל סימולציה</button>
+    <button id="go" class="go">הכן תרגיל</button>
   </div>
 </section>
 
@@ -243,7 +242,7 @@ select:hover, input[type=text]:hover { border-color: var(--line-lit); }
     <span class="pill" id="link"><b></b><span>ממתין</span></span>
     <span class="pill" id="toneP"><b></b><span>—</span></span>
     <span class="clock" id="clock">T+00:00</span>
-    <span class="pill" id="rate" hidden><b></b><span>×1</span></span>
+    <span class="pill" id="phase"><b></b><span>הכנה</span></span>
   </header>
 
   <div class="body">
@@ -255,7 +254,8 @@ select:hover, input[type=text]:hover { border-color: var(--line-lit); }
         <input id="text" type="text" placeholder="תשדורת…" autocomplete="off">
         <button type="submit" class="ico send">שלח</button>
         <button type="button" class="ico" id="mic" hidden>מיקרופון</button>
-        <button type="button" class="ico" id="cut">קטע</button>
+        <button type="button" class="ico go-ex" id="begin">התחל תרגיל</button>
+        <button type="button" class="ico" id="hold" hidden>השהה</button>
         <button type="button" class="ico" id="end">סיים</button>
       </form>
     </div>
@@ -323,7 +323,7 @@ $("go").onclick = async () => {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         mission_file: $("mission").value,
-        delivery_speed: Number($("speed").value),
+        channel: $("mode").value,
       }),
     });
     if (!res.ok) throw new Error((await res.json()).detail ?? "failed");
@@ -340,7 +340,7 @@ function start() {
   $("console").classList.add("on");
   $("ttl").textContent = session.title;
   $("callsigns").textContent =
-    `${session.counterpart_callsign} · אתה ${session.trainee_callsign}`;
+    `${session.operator_callsign} · אתה ${session.trainee_callsign}`;
   $("text").focus();
 
   stream = new EventSource(`${API}/sessions/${session.session_id}/stream`);
@@ -587,9 +587,25 @@ $("mic").onclick = () => {
   setLink(muting ? "hot" : "live", muting ? "מושתק" : "מקשיב");
 };
 
-$("cut").onclick = () => {
-  if (voice) voice.interrupt();
-  else post(`/sessions/${session.session_id}/interrupt`);
+// Starting the exercise is SEPARATE from preparing it: the trainer
+// presses play on the video in the same moment, and mission time has
+// stayed at zero through setup so the two stay in step.
+$("begin").onclick = async () => {
+  await post(`/sessions/${session.session_id}/start`);
+  $("begin").hidden = true;
+  $("hold").hidden = false;
+  $("text").focus();
+  sys("התרגיל התחיל. הפעל את הסרטון עכשיו.");
+};
+
+$("hold").onclick = async () => {
+  const paused = $("hold").dataset.paused === "1";
+  await post(`/sessions/${session.session_id}/${paused ? "resume" : "pause"}`);
+  $("hold").dataset.paused = paused ? "" : "1";
+  $("hold").textContent = paused ? "השהה" : "המשך";
+  $("hold").classList.toggle("armed", !paused);
+  // No control of the external player: the trainer pauses it separately.
+  sys(paused ? "התרגיל ממשיך." : "התרגיל מושהה. השהה גם את הסרטון.");
 };
 
 $("end").onclick = async () => {
@@ -611,9 +627,12 @@ async function post(path, body) {
 // ---------- instrument rail ----------
 // Shows the FULL state, including what the operator cannot see: to judge
 // whether his answers were honest you need to know what he does not.
-const TONE_LABEL = {
-  professional_clipped: "ענייני", urgent: "דחוף",
-  strained: "מאומץ", baseline: "רגיל", neutral: "רגיל",
+const PHASE_LABEL = {
+  preparing: "הכנה", ready: "מוכן", running: "פעיל",
+  paused: "מושהה", ended: "הסתיים",
+};
+const PHASE_KIND = {
+  preparing: "", ready: "hot", running: "live", paused: "hot", ended: "off",
 };
 
 async function pollState() {
@@ -628,68 +647,94 @@ async function pollState() {
       `T+${String(Math.floor(seconds / 60)).padStart(2, "0")}:` +
       `${String(seconds % 60).padStart(2, "0")}`;
 
-    // Mission time is compressed, so say so: a clock sprinting ahead
-    // otherwise reads as a bug rather than a setting.
-    const rate = Number(state.mission_speed ?? 1);
-    const rateEl = $("rate");
-    rateEl.hidden = rate <= 1;
-    if (rate > 1) {
-      rateEl.className = "pill hot";
-      rateEl.lastElementChild.textContent = `×${rate} זמן משימה`;
+    const phaseEl = $("phase");
+    phaseEl.className = `pill ${PHASE_KIND[state.phase] ?? ""}`;
+    phaseEl.lastElementChild.textContent =
+      PHASE_LABEL[state.phase] ?? state.phase;
+
+    if (state.phase === "running") {
+      $("begin").hidden = true;
+      $("hold").hidden = false;
     }
 
-    const toneEl = $("toneP");
-    toneEl.className = `pill ${state.tone === "urgent" ? "hot" : ""}`;
-    toneEl.lastElementChild.textContent = TONE_LABEL[state.tone] ?? state.tone;
-
+    // The TRAINER's panel: facts the crew can see, plus what it has
+    // agreed to report. Judging whether an answer was honest means
+    // knowing what the crew could and could not see.
     const rail = $("readings");
     rail.textContent = "";
-    for (const reading of state.readings) {
-      const row = document.createElement("div");
-      row.className = "rd";
-      if (reading.hidden_from_counterpart) row.classList.add("blind");
-      if (reading.in_transit_to !== undefined && reading.in_transit_to !== null) {
-        row.classList.add("moving");
-      }
 
-      const key = document.createElement("span");
-      key.className = "k";
-      key.textContent = reading.name;
-
-      const value = document.createElement("span");
-      value.className = "v";
-      value.textContent = String(reading.say_as ?? (
-        typeof reading.value === "number"
-          ? (Math.round(reading.value * 10) / 10).toLocaleString("he-IL")
-          : reading.value
-      ));
-      if (reading.unit) {
-        const unit = document.createElement("u");
-        unit.textContent = reading.unit;
-        value.append(unit);
-      }
-      row.append(key, value);
-      rail.append(row);
+    for (const [key, value] of Object.entries(state.operator_facts ?? {})) {
+      rail.append(row(key, String(value)));
     }
 
-    const fired = Object.keys(state.fired ?? {});
+    const current = (state.observations ?? []).filter((o) => o.is_current);
+    const past = (state.observations ?? []).filter((o) => !o.is_current);
+
+    if (current.length) {
+      rail.append(heading("כרגע"));
+      for (const o of current) rail.append(note(o.information));
+    }
+    if (past.length) {
+      rail.append(heading("קודם בסורטי"));
+      for (const o of past) rail.append(note(o.information, true));
+    }
+    if (state.handover_active) {
+      rail.append(heading("החלפת צוותים"));
+      rail.append(note("שיחה רגילה לא זמינה", true));
+    }
+
     const box = $("fired");
     box.textContent = "";
-    if (!fired.length) {
+    const commitments = state.commitments ?? [];
+    const owed = state.reports_owed ?? [];
+    if (!commitments.length && !owed.length) {
       const none = document.createElement("span");
       none.className = "none";
       none.textContent = "אין";
       box.append(none);
-    } else {
-      for (const id of fired) {
-        const chip = document.createElement("span");
-        chip.className = "chip hot";
-        chip.textContent = id;
-        box.append(chip);
-      }
+    }
+    for (const c of commitments) {
+      const chip = document.createElement("span");
+      chip.className = "chip";
+      chip.textContent = c.description || [...c.tags, ...c.entity_ids].join(", ");
+      box.append(chip);
+    }
+    for (const id of owed) {
+      const chip = document.createElement("span");
+      chip.className = "chip hot";
+      chip.textContent = `חייב לדווח · ${id}`;
+      box.append(chip);
     }
   } catch { /* the rail is advisory; a failed poll must not interrupt */ }
 }
-</script>
-</body>
-</html>
+
+function row(key, value) {
+  const el = document.createElement("div");
+  el.className = "rd";
+  const k = document.createElement("span");
+  k.className = "k";
+  k.textContent = key;
+  const v = document.createElement("span");
+  v.className = "v";
+  v.textContent = value;
+  el.append(k, v);
+  return el;
+}
+
+function heading(text) {
+  const el = document.createElement("h2");
+  el.textContent = text;
+  el.style.marginTop = "18px";
+  return el;
+}
+
+function note(text, dim = false) {
+  const el = document.createElement("div");
+  el.className = "rd";
+  if (dim) el.classList.add("blind");
+  const k = document.createElement("span");
+  k.className = "k";
+  k.textContent = text;
+  el.append(k);
+  return el;
+}

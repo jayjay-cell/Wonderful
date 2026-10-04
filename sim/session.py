@@ -1,301 +1,294 @@
-"""Session orchestration: one turn, end to end.
+"""The shared session layer: lifecycle, the domain loop, persistence.
 
-Owns the sequence that a turn actually is -- advance mission time, run the
-agent, record what was said -- and the failure handling around it.
+EVERY CHANNEL DRIVES THIS. Text, the ElevenLabs cascade and Gemini Live
+differ only in how audio moves; timeline, facts, commitments, handover,
+lifecycle and persistence all live here. The previous version let
+api/live_voice.py reimplement the domain layer, which silently lost two
+procedure rules and a whole tool, and ran a second trigger loop that
+double-counted every event.
 
-WHAT IS HERE NOW (step 3): reactive turns. The trainee transmits, the
-counterpart answers.
+The loop is split, which is the point of the refactor:
 
-WHAT COMES LATER, and why the seams exist already:
-  * step 4 -- the reply becomes a DeliveryPlan (stalls, pauses, pacing)
-    instead of a plain string. run_turn already returns a TurnResult rather
-    than a bare string, so that change does not ripple outward.
-  * step 5 -- self-initiated turns and interruption. run_turn takes an
-    `origin` so an initiated turn goes through the SAME path, which is
-    what keeps realism uniform between the two.
+    _reveal_loop   runs advance() every TICK_SECONDS. No awaits on the
+                   model or the speaker, so timeline revelation cannot be
+                   delayed by a slow turn.
+    _speak_loop    takes one owed report at a time and says it. Blocks
+                   for seconds; that is fine, because it is not what
+                   keeps time.
 
-FAILURE POLICY: a turn never crashes the session. A provider outage or a
-reached step limit produces a safe in-character transmission and leaves
-the conversation history untouched, so the next turn can retry cleanly
-(FR-G2). The real cause is logged server-side with a typed code only.
+Persistence hangs off record(), so a voice session is as debriefable as a
+text one -- which it previously was not at all.
 """
 
 from __future__ import annotations
 
-import time
-from dataclasses import dataclass, field
-from typing import Any, Literal
+import asyncio
+from datetime import datetime, timezone
+from typing import Any, Callable
 
-from agent.loop import build_agent, extract_reply_text, strip_system_messages
-from agent.prompts import build_initiative_cue
-from agent.state import (
-    SessionState,
-    append_trainee_message,
-    initial_state,
-)
-from core.models import Mission
-from core.procedure import check_transmission
-from core.state import MissionStateEngine
+from core.lifecycle import Phase
+from core.timeline import Priority
 from obs.logging import get_logger
-from sim.clock import Clock, RealClock
+from sim.exercise import TICK_SECONDS, Exercise, Utterance
+from sim.turns import TurnRunner
 
 logger = get_logger("sim.session")
 
-# Spoken when a turn fails. In character deliberately: a trainee hearing
-# "an error occurred" has left the simulation, whereas a garbled-comms
-# transmission is a thing that happens on a real net and keeps them in it.
-FALLBACK_REPLY = "מפקדה, נחשון 3, לא קיבלתי. אמור שוב."
-FALLBACK_REPLY_BY_LANGUAGE = {
-    "he": FALLBACK_REPLY,
-    "en": "Command, say again. I did not receive that.",
-}
-
-
-@dataclass
-class TurnResult:
-    """The outcome of one turn.
-
-    A structured result rather than a bare string, so step 4 can add a
-    delivery plan without changing every caller.
-    """
-
-    text: str
-    origin: Literal["reactive", "initiated"] = "reactive"
-    trigger_id: str | None = None
-    tool_calls: list[str] = field(default_factory=list)
-    step_count: int = 0
-    latency_ms: int = 0
-    failed: bool = False
-    failure_code: str | None = None
-
 
 class Session:
-    """One training session: a mission, its state, and the conversation."""
+    """One live exercise, with its channel and its store."""
 
     def __init__(
         self,
-        mission: Mission,
-        model: Any,
-        session_id: str,
-        clock: Clock | None = None,
+        exercise: Exercise,
+        turns: TurnRunner,
+        store: Any = None,
+        channel: str = "text",
+        on_utterance: Callable[[Utterance], Any] | None = None,
     ) -> None:
-        self.mission = mission
-        self.session_id = session_id
-        self.clock = clock or RealClock()
-        self.engine = MissionStateEngine(mission)
-        self.state: SessionState = initial_state()
-        self._model = model
+        self.exercise = exercise
+        self.turns = turns
+        self.store = store
+        self.channel = channel
 
-        # Mission-time stamps of the last transmission each way. Needed by
-        # the idle trigger, and tracked here rather than derived from the
-        # message list because history holds no timing.
-        self.last_trainee_at: float | None = None
-        self.last_counterpart_at: float | None = None
+        # Called after every recorded utterance so a channel can render
+        # it. Returning an awaitable is fine.
+        self.on_utterance = on_utterance
 
-        logger.info(
-            "session.started",
-            session_id=session_id,
-            mission_id=mission.id,
-            mission_version=mission.version,
-        )
+        self._reveal_task: asyncio.Task | None = None
+        self._speak_task: asyncio.Task | None = None
+        self._stopped = asyncio.Event()
 
-    # -- turns ------------------------------------------------------------
+        # One utterance at a time. A reactive reply and a report must not
+        # overlap on the net.
+        self._speaking = asyncio.Lock()
 
-    async def run_trainee_turn(self, transmission: str) -> TurnResult:
-        """Handle a transmission from the trainee."""
-        procedure_report = check_transmission(
-            self.mission,
-            transmission,
-            is_first_transmission=not self.state["trainee_has_transmitted"],
-            awaiting_readback_for=self.state["awaiting_readback_for"],
-        )
-        if procedure_report.violations:
-            logger.info(
-                "procedure.violation",
-                session_id=self.session_id,
-                reason=procedure_report.violations[0].kind,
+        self._persisted_reveals: set[str] = set()
+        self._persisted_agreements: set[str] = set()
+
+    # -- lifecycle --------------------------------------------------------
+
+    async def prepare(self) -> None:
+        """Finish preparation. Mission time is still zero."""
+        self.exercise.mark_ready()
+        if self.store is not None:
+            self.store.set_status(self.exercise.session_id, "ready")
+            self.store.set_channel(self.exercise.session_id, self.channel)
+
+    async def start(self) -> None:
+        """Begin, alongside the trainer's manual video start."""
+        self.exercise.start()
+        if self.store is not None:
+            self.store.set_status(self.exercise.session_id, "running")
+        self._reveal_task = asyncio.create_task(self._reveal_loop())
+        self._speak_task = asyncio.create_task(self._speak_loop())
+
+    async def pause(self) -> None:
+        """Freeze time and abandon anything in flight.
+
+        The loops keep running but do nothing, because the clock is frozen
+        and `is_running` is false. Cheaper and less error-prone than
+        cancelling and recreating them.
+        """
+        self.exercise.pause()
+        if self.store is not None:
+            self.store.set_status(self.exercise.session_id, "paused")
+
+    async def resume(self) -> None:
+        self.exercise.resume()
+        if self.store is not None:
+            self.store.set_status(self.exercise.session_id, "running")
+
+    async def end(self) -> None:
+        self.exercise.end()
+        self._stopped.set()
+        for task in (self._reveal_task, self._speak_task):
+            if task is not None and not task.done():
+                task.cancel()
+        if self.store is not None:
+            self.store.set_status(
+                self.exercise.session_id, "ended",
+                datetime.now(timezone.utc).isoformat(),
             )
 
-        append_trainee_message(self.state, transmission)
-        self.last_trainee_at = self.clock.now()
+    @property
+    def phase(self) -> Phase:
+        return self.exercise.phase
 
-        # A readback obligation is discharged by the trainee's next
-        # transmission regardless of outcome -- the counterpart challenges
-        # once and moves on, rather than holding a grudge for the rest of
-        # the session.
-        self.state["awaiting_readback_for"] = []
+    # -- the two loops ----------------------------------------------------
 
-        return await self._run_agent(origin="reactive")
+    async def _reveal_loop(self) -> None:
+        """Advance the timeline. Never awaits the model or the speaker.
 
-    async def run_initiated_turn(
-        self,
-        say_intent: str,
-        trigger_id: str,
-        instructions: str | None = None,
-    ) -> TurnResult:
-        """Have the counterpart transmit unprompted.
-
-        The cue enters history as DATA, not as an instruction, so the
-        counterpart phrases it in its own voice rather than reading the
-        intent string aloud (FR-C7).
-
-        Step 5 adds the suppression and deferral rules around WHEN this is
-        called; the mechanics of the turn itself are the same as a
-        reactive one, which is what keeps realism uniform.
+        This is the half that must stay on time: an authored event's
+        moment is a fact about the recording playing beside us, and a slow
+        turn must not move it.
         """
-        self.state["messages"].append({
-            "role": "user",
-            "content": build_initiative_cue(say_intent, instructions),
-        })
-        return await self._run_agent(origin="initiated", trigger_id=trigger_id)
-
-    async def _run_agent(
-        self,
-        origin: Literal["reactive", "initiated"],
-        trigger_id: str | None = None,
-    ) -> TurnResult:
-        """Run one agent turn and record the result."""
-        # Mission time advances BEFORE the model runs, so the counterpart
-        # reasons over current state rather than state as of the last turn.
-        self.engine.advance_to(self.clock.now())
-
-        started = time.monotonic()
-        # Rebuilt per turn: the system prompt embeds live state, and the
-        # tools close over the engine. The stable prefix of the prompt is
-        # byte-identical between turns, so caching still applies.
-        agent = build_agent(self.mission, self.engine, self._model)
-
         try:
-            result = await agent.ainvoke({"messages": self.state["messages"]})
+            while not self._stopped.is_set():
+                newly = self.exercise.advance()
+                for event in newly:
+                    self._persist_reveal(event.event_id)
+                self._persist_new_agreements()
+
+                if self.exercise.phase is Phase.ENDED:
+                    await self.end()
+                    return
+                await asyncio.sleep(TICK_SECONDS)
+        except asyncio.CancelledError:
+            raise
         except Exception as err:
-            return self._fallback(origin, trigger_id, err, started)
+            # A failure here would silently stop all revelation, so it is
+            # logged loudly rather than swallowed.
+            logger.exception("reveal_loop.failed",
+                             session_id=self.exercise.session_id,
+                             error_code=type(err).__name__, status="error")
 
-        messages = result.get("messages", [])
-        text = extract_reply_text(messages)
-
-        if not text.strip():
-            # An empty reply usually means the step limit was reached
-            # mid-tool-call. Treated as a recoverable failure: a silent
-            # counterpart is indistinguishable from a broken simulator.
-            return self._fallback(origin, trigger_id, None, started,
-                                  code="EMPTY_REPLY")
-
-        self.state["messages"] = strip_system_messages(messages)
-        self.state["last_failure"] = None
-        self.last_counterpart_at = self.clock.now()
-        self._note_readback_obligation(text)
-
-        latency_ms = int((time.monotonic() - started) * 1000)
-        tool_names = _tool_names(messages)
-
-        logger.info(
-            "turn.completed",
-            session_id=self.session_id,
-            origin=origin,
-            trigger_id=trigger_id,
-            latency_ms=latency_ms,
-            step_count=len(messages),
-            status="ok",
-        )
-
-        return TurnResult(
-            text=text,
-            origin=origin,
-            trigger_id=trigger_id,
-            tool_calls=tool_names,
-            step_count=len(messages),
-            latency_ms=latency_ms,
-        )
-
-    def _fallback(
-        self,
-        origin: Literal["reactive", "initiated"],
-        trigger_id: str | None,
-        err: Exception | None,
-        started: float,
-        code: str | None = None,
-    ) -> TurnResult:
-        """A safe in-character reply, with history left untouched.
-
-        Not appending the failed exchange is deliberate: the next turn
-        retries against clean state rather than inheriting a half-finished
-        turn the model would try to continue.
-        """
-        failure_code = code or (type(err).__name__ if err else "UNKNOWN")
-        self.state["last_failure"] = failure_code
-
-        logger.error(
-            "turn.failed",
-            session_id=self.session_id,
-            origin=origin,
-            trigger_id=trigger_id,
-            error_code=failure_code,
-            status="error",
-        )
-
-        return TurnResult(
-            text=FALLBACK_REPLY_BY_LANGUAGE.get(self.mission.language, FALLBACK_REPLY),
-            origin=origin,
-            trigger_id=trigger_id,
-            latency_ms=int((time.monotonic() - started) * 1000),
-            failed=True,
-            failure_code=failure_code,
-        )
-
-    def replace_last_counterpart_text(self, delivered: str) -> None:
-        """Rewrite the last reply to what was ACTUALLY delivered.
-
-        Called when an utterance was interrupted. Without this the model's
-        history holds words the trainee never heard, and it will later
-        refer back to a figure it never finished saying -- which reads as
-        the counterpart being confused or lying.
-        """
-        for index in range(len(self.state["messages"]) - 1, -1, -1):
-            message = self.state["messages"][index]
-            role = (message.get("role") if isinstance(message, dict)
-                    else getattr(message, "type", None))
-            if role in {"assistant", "ai"}:
-                suffix = " —" if delivered else ""
-                new_text = (delivered + suffix) if delivered else "[נקטע]"
-                if isinstance(message, dict):
-                    message["content"] = new_text
-                else:
-                    self.state["messages"][index] = {
-                        "role": "assistant", "content": new_text,
-                    }
-                return
-
-    def _note_readback_obligation(self, text: str) -> None:
-        """Record which reported values the trainee must read back.
-
-        Set when the counterpart has just stated a parameter the mission's
-        procedure requires reading back -- so the obligation is only ever
-        asserted after it was actually reported, never pre-emptively.
-        """
-        required: list[str] = []
-        for rule in self.mission.procedure.rules:
-            for parameter_id in rule.requires_readback_for:
-                parameter = self.mission.parameter(parameter_id)
-                if parameter is None:
+    async def _speak_loop(self) -> None:
+        """Deliver owed reports, and briefing requests, one at a time."""
+        try:
+            while not self._stopped.is_set():
+                await asyncio.sleep(TICK_SECONDS)
+                if not self.exercise.clock.is_running:
                     continue
-                mentioned = (parameter.display_name in text
-                             or (parameter.unit and parameter.unit in text))
-                if mentioned and any(c.isdigit() for c in text):
-                    required.append(parameter_id)
-        self.state["awaiting_readback_for"] = required
 
+                report = self.exercise.next_report()
+                if report is not None:
+                    await self._speak_report(report)
+                    continue
 
-def _tool_names(messages: list[Any]) -> list[str]:
-    """Tool names called during a turn, for logging and tests.
+                if self.exercise.should_request_briefing():
+                    await self._speak_briefing_request()
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
+            logger.exception("speak_loop.failed",
+                             session_id=self.exercise.session_id,
+                             error_code=type(err).__name__, status="error")
 
-    Names only -- arguments are never logged (FR-G5).
-    """
-    names: list[str] = []
-    for message in messages:
-        calls = (message.get("tool_calls") if isinstance(message, dict)
-                 else getattr(message, "tool_calls", None))
-        for call in calls or []:
-            name = call.get("name") if isinstance(call, dict) else getattr(call, "name", None)
-            if name:
-                names.append(name)
-    return names
+    async def _speak_report(self, report: Any) -> None:
+        async with self._speaking:
+            result = await self.turns.report_turn(
+                report.event.operator_information,
+                report.event.event_id,
+                report.event.instructions,
+                report.event.priority,
+            )
+            if result.abandoned:
+                # Paused or ended mid-generation. Nothing was said, so
+                # nothing is recorded -- and the report stays owed.
+                self._persist_reveal(report.event.event_id,
+                                     disposition="pending")
+                return
+            self._record("operator", result)
+            self._persist_reveal(report.event.event_id, reported=True,
+                                 disposition="delivered")
+
+    async def _speak_briefing_request(self) -> None:
+        async with self._speaking:
+            result = await self.turns.briefing_request_turn()
+            if not result.abandoned:
+                self._record("operator", result)
+
+    # -- trainee input ----------------------------------------------------
+
+    async def trainee_says(self, text: str) -> Any:
+        """Handle a trainee transmission.
+
+        Takes the speaking lock, so a report in flight finishes first --
+        except that an urgent report may already have interrupted, which
+        the delivery layer handles.
+        """
+        if not self.exercise.clock.is_running:
+            return None
+        async with self._speaking:
+            result = await self.turns.trainee_turn(text)
+            # The trainee's own transmission is recorded by the turn
+            # runner; this records the reply.
+            if self.store is not None:
+                self.store.add_utterance(
+                    self.exercise.session_id, speaker="trainee", text=text,
+                    mission_seconds=self.exercise.clock.now(), origin="reactive",
+                    delivery=self._delivery_kind(),
+                )
+            if not result.abandoned:
+                self._record("operator", result)
+            return result
+
+    def note_shared(self, fact: str) -> None:
+        """Record context the trainee supplied.
+
+        Glok may reason with it, attributed -- it never overwrites what the
+        recording shows.
+        """
+        self.exercise.state.note_shared(fact)
+
+    # -- recording --------------------------------------------------------
+
+    def _record(self, speaker: str, result: Any) -> None:
+        """Record an utterance that was actually delivered."""
+        utterance = Utterance(
+            speaker=speaker,          # type: ignore[arg-type]
+            text=result.text,
+            at=self.exercise.clock.now(),
+            origin=result.origin,
+            event_id=result.event_id,
+            status="failed" if result.failed else "completed",
+        )
+        self.exercise.record_utterance(utterance)
+
+        if self.store is not None:
+            self.store.add_utterance(
+                self.exercise.session_id, speaker=speaker, text=result.text,
+                mission_seconds=utterance.at, origin=result.origin,
+                event_id=result.event_id, status=utterance.status,
+                delivery=self._delivery_kind(),
+            )
+
+        if self.on_utterance is not None:
+            maybe = self.on_utterance(utterance)
+            if asyncio.iscoroutine(maybe):
+                asyncio.create_task(maybe)
+
+    def _delivery_kind(self) -> str:
+        """How faithfully the stored text reflects what was heard.
+
+        'streamed' for native speech-to-speech: the model generates audio
+        and transcribes its own speech, so if the trainee talks over it
+        what they actually heard can only be estimated. Marked rather than
+        implying a precision we do not have.
+        """
+        return "streamed" if self.channel == "gemini_live" else "paced"
+
+    def _persist_reveal(self, event_id: str, reported: bool = False,
+                        disposition: str = "pending") -> None:
+        if self.store is None:
+            return
+        key = f"{event_id}:{disposition}"
+        if key in self._persisted_reveals:
+            return
+        self._persisted_reveals.add(key)
+        self.store.add_revealed(
+            self.exercise.session_id, event_id,
+            self.exercise.clock.now(), reported=reported,
+            disposition=disposition,
+        )
+
+    def _persist_new_agreements(self) -> None:
+        """Record agreements the model made via its tools.
+
+        Polled from the ledger rather than hooked into the tool, so the
+        tool stays pure and every channel persists identically.
+        """
+        if self.store is None:
+            return
+        for commitment in self.exercise.ledger.commitments:
+            if commitment.commitment_id in self._persisted_agreements:
+                continue
+            self._persisted_agreements.add(commitment.commitment_id)
+            self.store.add_agreement(
+                self.exercise.session_id, commitment.commitment_id,
+                self.exercise.clock.now(), list(commitment.tags),
+                list(commitment.entity_ids), commitment.description,
+                commitment.status.value,
+            )
