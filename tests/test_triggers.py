@@ -374,3 +374,57 @@ class TestDisplayRounding:
         assert displayed == round(displayed, 1)
         # Full precision survives where it matters: arithmetic.
         assert engine.snapshot()["fuel"] != displayed
+
+
+class TestMissionTimeScaling:
+    """Regression: the speed setting did nothing to mission time.
+
+    `delivery_speed` compressed only SPEECH PACING, so a trainer who
+    selected x60 watched the clock crawl at 1x -- fuel never visibly
+    drained and timed checkpoints never arrived. It looked like the
+    triggers were broken.
+    """
+
+    def test_scaled_clock_multiplies_mission_time(self) -> None:
+        import time
+        from sim.clock import ScaledClock
+
+        clock = ScaledClock(60.0)
+        time.sleep(0.05)
+        # 50ms of real time is ~3s of mission time at x60.
+        assert clock.now() >= 2.0, clock.now()
+
+    def test_speed_selects_a_scaled_clock(self, mission) -> None:
+        from sim.clock import RealClock, ScaledClock
+
+        fast = SessionRunner(mission, ScriptedModel(replies=["x"]),
+                             CollectingChannel(), delivery_speed=60.0)
+        normal = SessionRunner(mission, ScriptedModel(replies=["x"]),
+                               CollectingChannel(), delivery_speed=1.0)
+        assert isinstance(fast.clock, ScaledClock)
+        assert fast.clock.multiplier == 60.0
+        assert isinstance(normal.clock, RealClock)
+
+    def test_explicit_clock_still_wins(self, mission) -> None:
+        """Tests pass a VirtualClock; the speed setting must not override
+        it, or every timing assertion would run on a real clock."""
+        clock = VirtualClock()
+        runner = SessionRunner(mission, ScriptedModel(replies=["x"]),
+                               CollectingChannel(), clock=clock,
+                               delivery_speed=60.0)
+        assert runner.clock is clock
+
+    def test_scaled_clock_rejects_nonpositive(self) -> None:
+        from sim.clock import ScaledClock
+        with pytest.raises(ValueError):
+            ScaledClock(0)
+
+    def test_fuel_drains_on_the_scaled_clock(self, mission) -> None:
+        """The point of the setting: state must actually move."""
+        import time
+        runner = SessionRunner(mission, ScriptedModel(replies=["x"]),
+                               CollectingChannel(), delivery_speed=120.0)
+        before = runner.session.engine.snapshot()["fuel"]
+        time.sleep(0.1)
+        runner.session.engine.advance_to(runner.clock.now())
+        assert runner.session.engine.snapshot()["fuel"] < before

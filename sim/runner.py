@@ -34,7 +34,7 @@ from core.triggers import (
 from delivery.plan import DeliveryOutcome, DeliveryPlan
 from delivery.scheduler import DeliveryChannel, execute
 from obs.logging import get_logger
-from sim.clock import Clock, RealClock
+from sim.clock import Clock, RealClock, ScaledClock
 from sim.session import Session
 
 logger = get_logger("sim.runner")
@@ -96,7 +96,16 @@ class SessionRunner:
     ) -> None:
         self.mission = mission
         self.session_id = session_id or secrets.token_urlsafe(8)
-        self.clock = clock or RealClock()
+        # The speed setting must drive MISSION TIME, not just speech
+        # pacing. Otherwise "x60" compresses how fast he talks while fuel
+        # still drains at 1x and timed checkpoints never arrive -- which
+        # reads as the triggers being broken.
+        if clock is not None:
+            self.clock = clock
+        elif delivery_speed > 1.0:
+            self.clock = ScaledClock(delivery_speed)
+        else:
+            self.clock = RealClock()
         self.channel = channel
         self.delivery_speed = delivery_speed
         self.seed = seed if seed is not None else (mission.realism.seed or new_seed())
@@ -379,7 +388,11 @@ class SessionRunner:
         self._active_priority = priority
         try:
             outcome = await execute(
-                plan, self.channel, barge_in=self._barge_in, speed=self.delivery_speed,
+                # Deliberately 1.0, not delivery_speed: the speed setting
+                # accelerates MISSION time, not his voice. Compressing
+                # speech would make him sound rushed and unnatural, which
+                # is the opposite of what the realism layer is for.
+                plan, self.channel, barge_in=self._barge_in, speed=1.0,
             )
         finally:
             self._delivery_active = False

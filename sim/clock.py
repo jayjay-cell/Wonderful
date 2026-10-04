@@ -41,6 +41,37 @@ class RealClock:
         self._started = time.monotonic()
 
 
+class ScaledClock:
+    """Mission time running faster than wall-clock time.
+
+    WHY THIS EXISTS: a bingo-fuel scenario is an hour away at real time,
+    so testing one meant sitting at a terminal for most of an hour. The
+    session's `delivery_speed` previously compressed only SPEECH PACING,
+    which left the mission clock at 1x -- so fuel never visibly drained
+    and timed checkpoints never arrived. A trainer setting "x60" saw
+    nothing happen, which looked like broken triggers.
+
+    Separate from VirtualClock: that one only moves when told, for tests.
+    This one runs on its own, just faster.
+    """
+
+    def __init__(self, multiplier: float = 1.0) -> None:
+        if multiplier <= 0:
+            raise ValueError(f"multiplier must be > 0, got {multiplier}")
+        self._started = time.monotonic()
+        self._multiplier = float(multiplier)
+
+    def now(self) -> float:
+        return (time.monotonic() - self._started) * self._multiplier
+
+    @property
+    def multiplier(self) -> float:
+        return self._multiplier
+
+    def reset(self) -> None:
+        self._started = time.monotonic()
+
+
 class VirtualClock:
     """Mission time that only moves when told to.
 

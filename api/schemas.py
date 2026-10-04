@@ -13,10 +13,14 @@ from pydantic import BaseModel, Field
 class StartSessionRequest(BaseModel):
     mission_file: str = Field(description="file name inside missions/")
 
-    # Mission-time multiplier for delivery. Lets a trainer reach a
-    # fuel-emergency scenario in minutes rather than sitting at a terminal
-    # for most of an hour.
-    delivery_speed: float = Field(default=1.0, gt=0.0, le=100.0)
+    # MISSION-TIME multiplier. At x60, one real second is one mission
+    # minute, so a bingo-fuel scenario is reachable in minutes instead of
+    # an hour. It does NOT speed up his speech: that stays natural, since
+    # a rushed voice is the opposite of what the realism layer is for.
+    #
+    # Kept under the old field name for compatibility with any saved
+    # client state; `mission_speed` is the accurate alias.
+    delivery_speed: float = Field(default=1.0, gt=0.0, le=200.0)
 
     # Fixing the seed replays a session's timing exactly, which is what
     # makes "run that again and watch what you missed" possible.

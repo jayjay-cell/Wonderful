@@ -300,6 +300,9 @@ async def session_state(session_id: str) -> dict[str, Any]:
 
     return {
         "mission_seconds": runner.clock.now(),
+        # Surfaced so the console can show the trainer that mission time
+        # is compressed -- otherwise a fast-moving clock looks like a bug.
+        "mission_speed": getattr(runner.clock, "multiplier", 1.0),
         "readings": [
             {**row, "hidden_from_counterpart": row["id"] not in visible}
             for row in runner.session.engine.describe_for_prompt(for_persona=False)
