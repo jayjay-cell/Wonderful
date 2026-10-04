@@ -1,21 +1,29 @@
-"""Mission file loading and cross-field validation.
+"""Mission state: initial facts and per-exercise configuration.
 
-Pure apart from reading the YAML file itself.
+Pure apart from reading YAML and Markdown.
 
-THE RULE HERE IS: FAIL LOUDLY (FR-E8). An invalid mission file never loads
-with silent defaults. It raises with the field path, the problem, and -- so
-a typo takes seconds rather than a debugging session -- a suggestion where
-one is obvious.
+WHAT THIS IS NOT ANY MORE. The previous version declared mutable
+parameters with physical dynamics -- fuel draining, altitude climbing
+toward a commanded target -- because the product was understood as a
+flight simulator. It is not. The recording is immutable, so there is
+nothing to simulate: there are authored INITIAL FACTS, and the timeline
+updates them as the exercise unfolds.
 
-Why this is strict rather than forgiving: a mission that quietly ignored a
-mistyped trigger id would run a scenario missing a safety-critical report,
-the trainee would be assessed on it, and nobody would know the trigger was
-never armed. Silence is the dangerous failure mode here, not noise.
+So `parameters` with `dynamics` is gone, and with it the idea that a
+trainee's instruction changes the world.
 
-Pydantic handles per-field validation in core/models.py. This module does
-what Pydantic cannot: checks that references BETWEEN sections resolve --
-derived expressions naming real parameters, tone shifts naming real
-triggers, persona.knows naming real parameters.
+THREE AUTHORED SOURCES, and this is the third:
+
+  context/*.md      reusable professional knowledge, shared by exercises
+  timeline .xlsx    what happens during the recording
+  missions/*.yaml   THIS FILE -- who, where, and how this exercise behaves
+
+Validation fails loudly. An exercise that loaded with a dangling reference
+would run missing a beat the author believed was there.
+
+Fields are mostly optional on purpose: exercises differ in shape, and
+requiring a fuel figure for an exercise where fuel is irrelevant would
+invite a fabricated number that looks like a real fact.
 """
 
 from __future__ import annotations
@@ -24,392 +32,284 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from core.derived import ExpressionError, referenced_names, validate_expression
-from core.models import Mission, ParameterType
+from core.conversation_state import DEFAULT_REESTABLISH_SILENCE
 
 
 class MissionError(Exception):
-    """A mission file could not be loaded.
-
-    `code` is a stable machine-readable reason (the table in
-    docs/specs/mission-format.md §12); `path` locates the offending field.
-    """
+    """A mission file could not be loaded. Names the field path."""
 
     def __init__(self, code: str, message: str, path: str | None = None,
                  source: str | Path | None = None) -> None:
-        location = f" at {path}" if path else ""
-        origin = f" in {source}" if source else ""
-        super().__init__(f"[{code}]{origin}{location}: {message}")
+        where = f" at {path}" if path else ""
+        origin = f" in {Path(source).name}" if source else ""
+        super().__init__(f"[{code}]{origin}{where}: {message}")
         self.code = code
         self.path = path
-        self.source = str(source) if source else None
+
+
+# ---------------------------------------------------------------------------
+# Sections
+# ---------------------------------------------------------------------------
+
+
+class Callsigns(BaseModel):
+    """Who is on the net. Mission DATA, not engine constants -- the brief
+    is explicit that these vary by exercise."""
+
+    operator: str                       # e.g. גלוק
+    trainee: str                        # e.g. מדבקה
+    controller: str | None = None       # e.g. משנה — named in context, not simulated
+
+
+class Setting(BaseModel):
+    """Where and why, plus what preceded the recording."""
+
+    purpose: str = ""
+    area: str = ""
+    background: str = ""
+    before_recording: str = ""          # what happened before the video starts
+
+    # Shown to the TRAINEE only. Kept separate from crew.prior_briefing
+    # because it may carry the intelligence intent Glok must not know.
+    trainee_briefing: str = ""
+
+
+class Crew(BaseModel):
+    """The crew, and which member the trainee actually talks to."""
+
+    operator_name: str = ""
+    role: str = ""
+    experience: str = ""
+    squadron: str = ""
+    composition: str = ""               # free text: "three-person crew"
+    gender: str = ""                    # for voice and grammatical agreement
+
+    # What the crew was told at the squadron before the sortie. Glok knows
+    # this from the first word -- they do not pretend ignorance -- but it
+    # must not contain unrevealed timeline events.
+    prior_briefing: str = ""
+
+
+class Platform(BaseModel):
+    """Aircraft and sensor, as capabilities rather than as state."""
+
+    aircraft: str = ""
+    sensor: str = ""
+    capabilities: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
+class Behaviour(BaseModel):
+    """How this crew behaves. Independently configurable per exercise.
+
+    0.0-1.0 with documented meaning at the ends, since an undocumented
+    magic number is a setting nobody can tune:
+
+      initiative  0 waits to be spoken to · 1 volunteers and chases gaps
+      challenge   0 accepts every instruction · 1 argues its professional view
+      verbosity   0 minimum words · 1 explains reasoning
+      patience    0 audibly impatient on repetition · 1 unbothered
+    """
+
+    initiative: float = Field(default=0.5, ge=0.0, le=1.0)
+    challenge: float = Field(default=0.5, ge=0.0, le=1.0)
+    verbosity: float = Field(default=0.4, ge=0.0, le=1.0)
+    patience: float = Field(default=0.6, ge=0.0, le=1.0)
+
+    style: str = ""                     # free text, the most useful field
+
+    # Grace period before a proactive crew asks for a skipped briefing.
+    # INITIAL TUNING DEFAULT, not a real-world rule.
+    briefing_request_after: float = Field(default=90.0, ge=0.0)
+
+
+class HandoverPolicy(BaseModel):
+    """Crew rotation behaviour.
+
+    Timing is authored in the TIMELINE, not here: a recording can start
+    partway through a shift, so a fixed four-hour schedule would be wrong
+    for most exercises.
+    """
+
+    announcement: str = ""              # e.g. "אנחנו בהחלפת צוותים, שתי דקות"
+    busy_reply: str = ""                # if called mid-handover
+    inherit_facts: bool = True          # incoming crew knows established facts
+    inherit_commitments: bool = True    # and honours existing agreements
+    expects_rebrief: bool = False
+    allow_urgent: bool = True           # authored urgent events may still come
+
+
+class ImpossibleRequests(BaseModel):
+    """How to decline something the recording cannot do.
+
+    The trainee may ask to zoom, slew or change altitude. None of that can
+    happen. The reply must stay in role: never mention a video, never
+    invent a mechanical failure, never claim the action was taken.
+
+    `explanations` maps a topic to an AUTHOR-SUPPLIED in-character reason.
+    `fallback` is used when nothing specific is authored -- honest rather
+    than inventive.
+    """
+
+    explanations: dict[str, str] = Field(default_factory=dict)
+    fallback: str = ""
+
+
+class Reporting(BaseModel):
+    """Baseline reporting expectations, beyond per-event policy."""
+
+    instructions: str = ""
+    # Urgent events may cut across trainee speech. A crew that interrupts
+    # routinely is a nuisance; one that never does is unrealistic when
+    # something matters, so this is on but gated on event priority.
+    allow_urgent_interruption: bool = True
+
+
+class Realism(BaseModel):
+    """Optional delivery tuning. Conservative by default, because an
+    over-hesitant operator reads as a broken connection."""
+
+    response_delay_ms: tuple[int, int] = (500, 1800)
+    stall_probability: float = Field(default=0.12, ge=0.0, le=1.0)
+    filler_probability: float = Field(default=0.12, ge=0.0, le=1.0)
+    filler_sounds: list[str] = Field(default_factory=list)
+    seed: int | None = None
+
+
+class PrivateNotes(BaseModel):
+    """Author/debrief material. NEVER reaches the operator.
+
+    Its own section with an explicit flag so the exclusion is structural:
+    a reader of the mission file can see at a glance that this is hidden,
+    and the prompt builder has one obvious thing to skip.
+    """
+
+    visible_to_operator: bool = False
+    solution: str = ""
+    debrief_points: list[str] = Field(default_factory=list)
+    notes: str = ""
+
+    @model_validator(mode="after")
+    def _must_stay_hidden(self) -> "PrivateNotes":
+        if self.visible_to_operator:
+            raise ValueError(
+                "private.visible_to_operator must be false; this section exists "
+                "to hold material the operator must never see"
+            )
+        return self
+
+
+class Mission(BaseModel):
+    """One authored exercise."""
+
+    id: str
+    title: str
+    version: int = 1
+    language: str = "he"
+    duration_seconds: float | None = None   # falls back to the timeline's end
+
+    callsigns: Callsigns
+    setting: Setting = Field(default_factory=Setting)
+    crew: Crew = Field(default_factory=Crew)
+    platform: Platform = Field(default_factory=Platform)
+    behaviour: Behaviour = Field(default_factory=Behaviour)
+    handover: HandoverPolicy = Field(default_factory=HandoverPolicy)
+    impossible_requests: ImpossibleRequests = Field(default_factory=ImpossibleRequests)
+    reporting: Reporting = Field(default_factory=Reporting)
+    realism: Realism = Field(default_factory=Realism)
+    private: PrivateNotes = Field(default_factory=PrivateNotes)
+
+    # Initial readings: free-form, all optional. A dict rather than a typed
+    # schema because exercises differ in what matters, and a fixed
+    # UAV-shaped schema would force irrelevant or invented values.
+    initial_facts: dict[str, Any] = Field(default_factory=dict)
+
+    # Which readings Glok cannot see. Everything else in initial_facts and
+    # the revealed timeline is fair game.
+    hidden_facts: list[str] = Field(default_factory=list)
+
+    context_files: list[str] = Field(default_factory=list)
+    timeline_file: str = ""
+
+    reestablish_silence: float = Field(default=DEFAULT_REESTABLISH_SILENCE, ge=0.0)
+
+    def operator_facts(self) -> dict[str, Any]:
+        """Initial facts Glok may see."""
+        hidden = set(self.hidden_facts)
+        return {k: v for k, v in self.initial_facts.items() if k not in hidden}
+
+
+# ---------------------------------------------------------------------------
+# Loading
+# ---------------------------------------------------------------------------
 
 
 def load_mission(path: str | Path) -> Mission:
-    """Load, parse and fully validate a mission file.
-
-    Raises MissionError for anything wrong -- never returns a partially
-    valid mission.
-    """
     path = Path(path)
     if not path.exists():
-        raise MissionError("FILE_NOT_FOUND", f"no such mission file: {path}", source=path)
-
+        raise MissionError("FILE_NOT_FOUND", f"no such mission file: {path}")
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as err:
-        raise MissionError("INVALID_YAML", f"could not parse YAML: {err}", source=path) from err
-
-    if raw is None:
-        raise MissionError("EMPTY_FILE", "mission file is empty", source=path)
+        raise MissionError("INVALID_YAML", f"could not parse YAML: {err}",
+                           source=path) from err
     if not isinstance(raw, dict):
-        raise MissionError(
-            "INVALID_STRUCTURE",
-            f"mission file must be a mapping at the top level, got {type(raw).__name__}",
-            source=path,
-        )
-
+        raise MissionError("INVALID_STRUCTURE",
+                           "mission file must be a mapping at the top level",
+                           source=path)
     return load_mission_dict(raw, source=path)
 
 
 def load_mission_dict(raw: dict[str, Any], source: str | Path | None = None) -> Mission:
-    """Validate an already-parsed mission mapping. Separated from file
-    reading so tests can build missions inline with no temp files."""
     try:
         mission = Mission.model_validate(raw)
     except ValidationError as err:
-        raise MissionError("INVALID_FIELD", _format_pydantic_error(err), source=source) from err
+        problems = "; ".join(
+            f"{'.'.join(str(p) for p in e['loc']) or '<root>'}: {e['msg']}"
+            for e in err.errors()
+        )
+        raise MissionError("INVALID_FIELD", problems, source=source) from err
 
-    _validate_cross_references(mission, source)
+    _check_references(mission, source)
     return mission
 
 
-def _format_pydantic_error(err: ValidationError) -> str:
-    """Turn Pydantic's structured errors into one readable line per problem,
-    with the field path spelled out as it appears in the YAML."""
-    lines = []
-    for e in err.errors():
-        location = ".".join(str(p) for p in e["loc"]) or "<root>"
-        lines.append(f"{location}: {e['msg']}")
-    return "; ".join(lines)
-
-
-def _validate_cross_references(mission: Mission, source: str | Path | None) -> None:
-    """Checks spanning more than one section -- the ones Pydantic cannot do
-    because they need the whole document."""
-
-    parameter_ids = mission.parameter_ids()
-    derived_ids = mission.derived_ids()
-
-    # -- duplicate ids --------------------------------------------------
-    _check_duplicates(parameter_ids, "parameters", source)
-    _check_duplicates(derived_ids, "derived", source)
-    _check_duplicates(mission.triggers.all_ids(), "triggers", source)
-
-    overlap = set(parameter_ids) & set(derived_ids)
-    if overlap:
+def _check_references(mission: Mission, source: str | Path | None) -> None:
+    """Cross-field checks Pydantic cannot do alone."""
+    unknown = [k for k in mission.hidden_facts if k not in mission.initial_facts]
+    if unknown:
+        import difflib
+        hints = []
+        for key in unknown:
+            close = difflib.get_close_matches(key, list(mission.initial_facts), n=1)
+            hints.append(f"{key!r}" + (f" (did you mean {close[0]!r}?)" if close else ""))
         raise MissionError(
-            "DUPLICATE_ID",
-            f"id(s) used by both a parameter and a derived value: {sorted(overlap)}",
-            source=source,
+            "UNKNOWN_FACT",
+            f"hidden_facts names {', '.join(hints)}, which is not in initial_facts",
+            path="hidden_facts", source=source,
         )
 
-    known_names = set(parameter_ids) | set(derived_ids)
-
-    # -- derived expressions --------------------------------------------
-    for spec in mission.derived:
-        try:
-            validate_expression(spec.expr, allowed_names=known_names)
-        except ExpressionError as err:
-            raise MissionError(
-                _expression_error_code(err),
-                str(err) + _suggest_for_expression(err, known_names),
-                path=f"derived.{spec.id}.expr", source=source,
-            ) from err
-
-        if spec.id in referenced_names(spec.expr):
-            raise MissionError(
-                "CIRCULAR_REFERENCE",
-                f"derived value {spec.id!r} refers to itself",
-                path=f"derived.{spec.id}.expr", source=source,
-            )
-
-    _check_derived_cycles(mission, source)
-
-    # -- threshold conditions -------------------------------------------
-    for trigger in mission.triggers.thresholds:
-        try:
-            validate_expression(trigger.when, allowed_names=known_names)
-        except ExpressionError as err:
-            raise MissionError(
-                _expression_error_code(err),
-                str(err) + _suggest_for_expression(err, known_names),
-                path=f"triggers.thresholds.{trigger.id}.when", source=source,
-            ) from err
-
-    # -- enum spoken labels ---------------------------------------------
-    for parameter in mission.parameters:
-        for key in (*parameter.value_labels, *parameter.value_aliases):
-            if key not in (parameter.values or []):
-                raise MissionError(
-                    "UNKNOWN_VALUE_LABEL",
-                    f"value_labels on {parameter.id!r} has an entry for {key!r}, "
-                    f"which is not one of {parameter.values}"
-                    + _suggest(key, list(parameter.values or [])),
-                    path=f"parameters.{parameter.id}.value_labels", source=source,
-                )
-
-    # -- timeline checkpoint conditions and chaining ---------------------
-    timeline_ids = {t.id for t in mission.triggers.timeline}
-    for trigger in mission.triggers.timeline:
-        if trigger.when:
-            try:
-                validate_expression(trigger.when, allowed_names=known_names)
-            except ExpressionError as err:
-                raise MissionError(
-                    _expression_error_code(err),
-                    str(err) + _suggest_for_expression(err, known_names),
-                    path=f"triggers.timeline.{trigger.id}.when", source=source,
-                ) from err
-
-        if trigger.after:
-            if trigger.after == trigger.id:
-                raise MissionError(
-                    "CIRCULAR_REFERENCE",
-                    f"checkpoint {trigger.id!r} waits for itself",
-                    path=f"triggers.timeline.{trigger.id}.after", source=source,
-                )
-            if trigger.after not in timeline_ids:
-                raise MissionError(
-                    "UNKNOWN_TRIGGER_REF",
-                    f"checkpoint {trigger.id!r} waits for {trigger.after!r}, which is "
-                    f"not a timeline checkpoint"
-                    + _suggest(trigger.after, sorted(timeline_ids)),
-                    path=f"triggers.timeline.{trigger.id}.after", source=source,
-                )
-
-    _check_checkpoint_chain_cycles(mission, source)
-
-    # A checkpoint with neither a transmission nor a world change does
-    # nothing at all. Almost certainly an unfinished edit, and silence
-    # here would mean a scenario quietly missing a beat the author
-    # believed was there.
-    for group_name, group in (
-        ("timeline", mission.triggers.timeline),
-        ("thresholds", mission.triggers.thresholds),
-        ("idle", mission.triggers.idle),
-    ):
-        for trigger in group:
-            if not trigger.say_intent and not trigger.effects:
-                raise MissionError(
-                    "EMPTY_TRIGGER",
-                    f"{group_name} entry {trigger.id!r} has neither 'say_intent' nor "
-                    f"'effects', so it would do nothing when it fires",
-                    path=f"triggers.{group_name}.{trigger.id}", source=source,
-                )
-
-    # -- trigger effects ------------------------------------------------
-    for group_name, group in (
-        ("timeline", mission.triggers.timeline),
-        ("thresholds", mission.triggers.thresholds),
-        ("idle", mission.triggers.idle),
-    ):
-        for trigger in group:
-            for effect in trigger.effects:
-                param = mission.parameter(effect.parameter)
-                if param is None:
-                    raise MissionError(
-                        "UNKNOWN_PARAMETER_REF",
-                        f"effect targets unknown parameter {effect.parameter!r}"
-                        + _suggest(effect.parameter, parameter_ids),
-                        path=f"triggers.{group_name}.{trigger.id}.effects", source=source,
-                    )
-                if param.type is ParameterType.ENUM and effect.value not in (param.values or []):
-                    raise MissionError(
-                        "INVALID_VALUE",
-                        f"effect sets {param.id!r} to {effect.value!r}, "
-                        f"not one of {param.values}",
-                        path=f"triggers.{group_name}.{trigger.id}.effects", source=source,
-                    )
-
-    # -- persona knowledge boundary -------------------------------------
-    for field_name in ("knows", "does_not_know"):
-        for ref in getattr(mission.persona, field_name):
-            if ref not in known_names:
-                raise MissionError(
-                    "UNKNOWN_PARAMETER_REF",
-                    f"persona.{field_name} names {ref!r}, which is not a declared "
-                    f"parameter or derived value" + _suggest(ref, sorted(known_names)),
-                    path=f"persona.{field_name}", source=source,
-                )
-
-    # -- tone shifts ----------------------------------------------------
-    trigger_ids = set(mission.triggers.all_ids())
-    for shift in mission.tone.shifts:
-        if shift.when not in trigger_ids:
-            raise MissionError(
-                "UNKNOWN_TRIGGER_REF",
-                f"tone shift condition {shift.when!r} is not a declared trigger id"
-                + _suggest(shift.when, sorted(trigger_ids)),
-                path="tone.shifts", source=source,
-            )
-        # A tone with no profile is legal -- it still reaches the prompt as
-        # a named manner of speaking -- but a typo'd name would otherwise
-        # be invisible, so require either a profile or the baseline.
-        if shift.to not in mission.tone.profiles and shift.to != mission.tone.baseline:
-            raise MissionError(
-                "UNKNOWN_TONE",
-                f"tone shift targets {shift.to!r}, which has no entry in tone.profiles"
-                + _suggest(shift.to, sorted(mission.tone.profiles)),
-                path="tone.shifts", source=source,
-            )
-
-    # -- garbling source ------------------------------------------------
-    garble = mission.realism.garble_by
-    if garble is not None:
-        param = mission.parameter(garble.parameter)
-        if param is None:
-            raise MissionError(
-                "INVALID_GARBLE_SOURCE",
-                f"realism.garble_by.parameter {garble.parameter!r} is not a declared parameter"
-                + _suggest(garble.parameter, parameter_ids),
-                path="realism.garble_by.parameter", source=source,
-            )
-        if param.type is not ParameterType.ENUM:
-            raise MissionError(
-                "INVALID_GARBLE_SOURCE",
-                f"realism.garble_by.parameter {garble.parameter!r} must be an enum "
-                f"parameter, but is {param.type.value}",
-                path="realism.garble_by.parameter", source=source,
-            )
-        missing = set(param.values or []) - set(garble.probabilities)
-        if missing:
-            raise MissionError(
-                "INVALID_GARBLE_SOURCE",
-                f"realism.garble_by.probabilities is missing entries for "
-                f"{sorted(missing)}; every value of {param.id!r} needs one",
-                path="realism.garble_by.probabilities", source=source,
-            )
-
-    # -- procedure ------------------------------------------------------
-    for rule in mission.procedure.rules:
-        for ref in rule.requires_readback_for:
-            if ref not in known_names:
-                raise MissionError(
-                    "UNKNOWN_PARAMETER_REF",
-                    f"procedure rule {rule.id!r} requires readback for {ref!r}, "
-                    f"which is not a declared parameter"
-                    + _suggest(ref, sorted(known_names)),
-                    path=f"procedure.rules.{rule.id}.requires_readback_for", source=source,
-                )
+    if mission.duration_seconds is not None and mission.duration_seconds <= 0:
+        raise MissionError("INVALID_DURATION",
+                           "duration_seconds must be positive",
+                           path="duration_seconds", source=source)
 
 
-def _check_duplicates(ids: list[str], section: str, source: str | Path | None) -> None:
-    seen: set[str] = set()
-    duplicates: set[str] = set()
-    for i in ids:
-        if i in seen:
-            duplicates.add(i)
-        seen.add(i)
-    if duplicates:
-        raise MissionError(
-            "DUPLICATE_ID",
-            f"duplicate id(s) in {section}: {sorted(duplicates)}",
-            path=section, source=source,
-        )
+def load_context(paths: list[str], base: Path) -> str:
+    """Concatenate global-context Markdown into one block.
 
-
-def _check_derived_cycles(mission: Mission, source: str | Path | None) -> None:
-    """Detect cycles among derived values at LOAD time.
-
-    MissionStateEngine would also raise on a cycle, but by then the mission
-    is already running; catching it here keeps the failure where the author
-    can act on it.
+    Shared professional knowledge, loaded per exercise rather than copied
+    into each mission file -- so correcting a convention corrects it
+    everywhere.
     """
-    derived_ids = {d.id for d in mission.derived}
-    dependencies = {d.id: referenced_names(d.expr) & derived_ids for d in mission.derived}
-
-    resolved: set[str] = set()
-    remaining = dict(dependencies)
-    while remaining:
-        ready = [i for i, deps in remaining.items() if not (deps - resolved)]
-        if not ready:
-            raise MissionError(
-                "CIRCULAR_REFERENCE",
-                f"circular dependency among derived values: {sorted(remaining)}",
-                path="derived", source=source,
-            )
-        for i in ready:
-            resolved.add(i)
-            del remaining[i]
-
-
-def _expression_error_code(err: ExpressionError) -> str:
-    """Distinguish a dangerous expression from a mistyped reference.
-
-    Worth separating: 'unsafe' means someone wrote something that could
-    execute code and the author should look hard at where the file came
-    from; 'unknown reference' is an ordinary typo.
-    """
-    message = str(err)
-    if "disallowed" in message or "unknown function" in message or "not allowed" in message:
-        return "UNSAFE_EXPRESSION"
-    if "syntax error" in message:
-        return "INVALID_EXPRESSION"
-    return "UNKNOWN_PARAMETER_REF"
-
-
-def _suggest_for_expression(err: ExpressionError, known_names: set[str]) -> str:
-    """Add a 'did you mean' hint for an unknown reference inside an
-    expression.
-
-    Expressions are where typos are MOST likely -- a parameter id is typed
-    by hand there rather than picked from a list -- so the hint matters
-    more here than anywhere else.
-    """
-    import re
-
-    match = re.search(r"unknown reference '([^']+)'", str(err))
-    if not match:
-        return ""
-    return _suggest(match.group(1), sorted(known_names))
-
-
-def _check_checkpoint_chain_cycles(mission: Mission, source: str | Path | None) -> None:
-    """Detect a cycle in `after` chaining at LOAD time.
-
-    A cycle means those checkpoints could never fire. Caught here rather
-    than at runtime, where the symptom would be a scenario that silently
-    skips part of its timeline -- the trainee would be assessed on a beat
-    that never happened.
-    """
-    waits_for = {
-        t.id: t.after for t in mission.triggers.timeline if t.after
-    }
-    for start in waits_for:
-        seen = {start}
-        current = waits_for.get(start)
-        while current is not None:
-            if current in seen:
-                raise MissionError(
-                    "CIRCULAR_REFERENCE",
-                    f"checkpoints wait on each other in a cycle: {sorted(seen)}",
-                    path="triggers.timeline", source=source,
-                )
-            seen.add(current)
-            current = waits_for.get(current)
-
-
-def _suggest(given: str, candidates: list[str]) -> str:
-    """A 'did you mean' hint for a near-miss id.
-
-    Cheap to compute and disproportionately useful: most mission-file
-    errors in practice are a typo or a renamed parameter, and naming the
-    likely intended id turns a hunt into a glance.
-    """
-    import difflib
-
-    close = difflib.get_close_matches(given, candidates, n=1, cutoff=0.6)
-    return f". Did you mean {close[0]!r}?" if close else ""
+    parts: list[str] = []
+    for name in paths:
+        candidate = (base / name) if not Path(name).is_absolute() else Path(name)
+        if not candidate.exists():
+            raise MissionError("CONTEXT_NOT_FOUND",
+                               f"context file not found: {name}",
+                               path="context_files")
+        parts.append(candidate.read_text(encoding="utf-8").strip())
+    return "\n\n---\n\n".join(p for p in parts if p)

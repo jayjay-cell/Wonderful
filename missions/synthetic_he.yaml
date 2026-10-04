@@ -1,0 +1,188 @@
+# =============================================================================
+#  ⚠  SYNTHETIC EXERCISE — ILLUSTRATES STRUCTURE ONLY
+#
+#  Every value here was written to demonstrate the file format. None of it
+#  is validated professional material: not the background, not the crew,
+#  not the platform, not the readings, not the phrasing. Replace all of it.
+#
+#  Callsigns are the one exception — גלוק and מדבקה were supplied.
+#
+#  This is source C of three:
+#    context/*.md          reusable professional knowledge
+#    timelines/*.xlsx      what happens during the recording
+#    missions/*.yaml       ← this file
+#
+#  Validate without a model:
+#    python -m sim.cli --mission missions/synthetic_he.yaml
+# =============================================================================
+
+id: synthetic_he
+version: 1
+language: he
+title: "תרגיל סינתטי — מבנה לדוגמה"
+
+# Exercise length. Omit to use the timeline's last authored moment.
+duration_seconds: 1200          # 20 minutes
+
+# -----------------------------------------------------------------------------
+# WHO IS ON THE NET. Mission data, not engine constants.
+# -----------------------------------------------------------------------------
+callsigns:
+  operator: "גלוק"              # supplied
+  trainee: "מדבקה"              # supplied
+  controller: "משנה"            # named in context; NOT simulated
+
+# -----------------------------------------------------------------------------
+# WHERE AND WHY
+# -----------------------------------------------------------------------------
+setting:
+  purpose: "SYNTHETIC: לקבוע אם המבנה באזור היעד מאוכלס"
+  area: "SYNTHETIC: אזור כפרי, מבנה בודד ליד צומת דרכים"
+  background: |
+    SYNTHETIC. כטב"ם באוויר במשימת איסוף מעל אזור היעד.
+    ההקלטה מתחילה כשהמטוס כבר בגזרה.
+  before_recording: |
+    SYNTHETIC. המשימה החלה כ-40 דקות לפני תחילת ההקלטה.
+    לא תועדו אירועים חריגים עד לנקודה זו.
+
+  # Shown to the TRAINEE before starting. Never given to the model —
+  # it may carry intent the operator must not know.
+  trainee_briefing: |
+    SYNTHETIC. אתה קמ"ק, קריאה מדבקה.
+    עליך לקבוע אם המבנה מאוכלס, ולנהל את המשימה מול הצוות.
+    הצוות תודרך בטייסת ומכיר את הרקע הכללי.
+
+# -----------------------------------------------------------------------------
+# THE CREW
+# -----------------------------------------------------------------------------
+crew:
+  operator_name: "SYNTHETIC: לא צוין"
+  role: "מפעיל כטב\"ם"
+  experience: "SYNTHETIC: ותק בינוני על הדגם"
+  composition: "SYNTHETIC: צוות של שלושה; מדבקה מדבר בעיקר עם אחד"
+  gender: "male"
+
+  # What the crew was told at the squadron. Glok holds this from the first
+  # word. It must NOT contain unrevealed timeline events.
+  prior_briefing: |
+    SYNTHETIC. תודרכנו על משימת איסוף מעל אזור היעד,
+    עם דגש על המבנה ליד הצומת. לא נמסרו פרטים נוספים.
+
+# -----------------------------------------------------------------------------
+# PLATFORM — capabilities, not mutable state
+# -----------------------------------------------------------------------------
+platform:
+  aircraft: "SYNTHETIC: לא צוין דגם"
+  sensor: "SYNTHETIC: חיישן יום"
+  capabilities:
+    - "SYNTHETIC: צילום רציף של אזור היעד"
+  limitations:
+    - "SYNTHETIC: זווית הצילום קבועה לאורך הקטע המוקלט"
+    - "SYNTHETIC: אין שליטה על מיקום המטוס במהלך התרגיל"
+
+# -----------------------------------------------------------------------------
+# INITIAL FACTS — all optional. Omit rather than invent.
+#
+# Free-form on purpose: exercises differ in what matters, and a fixed
+# schema would force irrelevant or fabricated values.
+# -----------------------------------------------------------------------------
+initial_facts:
+  ראות: "בינונית"
+  מצב_חיישן: "סורק את אזור היעד"
+  # NOTE: no fuel or altitude figures. None were supplied, and a
+  # plausible-looking invented number is worse than an absent one — the
+  # operator answers "I don't have that" instead.
+
+# Facts the operator cannot see. Everything else is fair game.
+hidden_facts: []
+
+# -----------------------------------------------------------------------------
+# BEHAVIOUR — independently configurable per exercise
+#
+#   initiative  0 waits to be spoken to · 1 volunteers and chases gaps
+#   challenge   0 accepts every instruction · 1 argues its view
+#   verbosity   0 minimum words · 1 explains reasoning
+#   patience    0 audibly impatient on repetition · 1 unbothered
+# -----------------------------------------------------------------------------
+behaviour:
+  initiative: 0.6               # will ask for a skipped briefing
+  challenge: 0.5                # queries genuine ambiguity, then complies
+  verbosity: 0.35
+  patience: 0.6
+  style: |
+    SYNTHETIC. ענייני וקצר. מדווח מה שרואה, לא מה שהוא מסיק.
+    כשלא בטוח — אומר את זה.
+  briefing_request_after: 90     # seconds of silence before asking
+
+# Formal addressing returns after this much silence.
+# INITIAL TUNING DEFAULT — not a real-world rule.
+reestablish_silence: 30
+
+# -----------------------------------------------------------------------------
+# HANDOVER — timing is authored in the TIMELINE, not here
+# -----------------------------------------------------------------------------
+handover:
+  announcement: "אנחנו בהחלפת צוותים, שתי דקות אנחנו איתך."
+  busy_reply: "אנחנו בהחלפת צוותים, חוזר אליך בקרוב."
+  inherit_facts: true
+  inherit_commitments: true
+  expects_rebrief: false
+  allow_urgent: true
+
+# -----------------------------------------------------------------------------
+# IMPOSSIBLE REQUESTS
+#
+# The recording cannot change. Declines come from here and stay in role:
+# never mention a video, never invent a malfunction, never claim the
+# action happened.
+# -----------------------------------------------------------------------------
+impossible_requests:
+  explanations:
+    zoom: "SYNTHETIC: אני על ההגדלה המקסימלית שיש לי כרגע בגזרה הזו."
+    angle: "SYNTHETIC: הזווית קבועה בקטע הזה, אני לא יכול לשנות אותה עכשיו."
+    altitude: "SYNTHETIC: שינוי גובה צריך לעבור דרך משנה, לא דרכי."
+  fallback: "SYNTHETIC: זה לא משהו שאני יכול לעשות כרגע."
+
+# -----------------------------------------------------------------------------
+# REPORTING
+# -----------------------------------------------------------------------------
+reporting:
+  instructions: |
+    SYNTHETIC. מדווח יזום על שינוי משמעותי בתמונה.
+    שאר המידע — לפי דרישה או לפי הסכמה בשיחה.
+  allow_urgent_interruption: true
+
+# -----------------------------------------------------------------------------
+# DELIVERY TUNING — optional
+# -----------------------------------------------------------------------------
+realism:
+  response_delay_ms: [500, 1800]
+  stall_probability: 0.12
+  filler_probability: 0.1
+  filler_sounds: ["אה", "רגע"]
+  seed: null                     # set an integer to replay timing exactly
+
+# -----------------------------------------------------------------------------
+# PRIVATE — author and debrief only. NEVER reaches the operator.
+# -----------------------------------------------------------------------------
+private:
+  visible_to_operator: false     # must stay false; validated at load
+  solution: |
+    SYNTHETIC. המבנה מאוכלס — שני רכבים מגיעים ועוצרים לידו
+    בדקות 3 ו-8, ואדם נראה יוצא בדקה 9.
+  debrief_points:
+    - "SYNTHETIC: האם הקמ\"ק שיתף את ההישג הנדרש, או רק נתן הוראות?"
+    - "SYNTHETIC: האם ביקש דיווח על כל רכב, או פספס את השני?"
+
+# -----------------------------------------------------------------------------
+# THE OTHER TWO SOURCES
+# -----------------------------------------------------------------------------
+context_files:
+  - roles-and-authority.md
+  - communication.md
+  - briefing-norms.md
+  - mission-workflow.md
+  - crew-handover.md
+  - examples.md
+
+timeline_file: synthetic_he.csv
