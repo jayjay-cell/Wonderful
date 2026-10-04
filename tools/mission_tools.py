@@ -109,10 +109,15 @@ def build_mission_tools(exercise: Exercise) -> list[Callable[..., Any]]:
     ) -> dict[str, Any]:
         """Record that you have AGREED to report on something.
 
-        Call this only AFTER you have actually agreed. If you are still
-        clarifying what is wanted, or you pushed back and it was not
-        resolved, do not call it — registering a request that was never
-        agreed holds the other side to something they did not ask for.
+        CALL THIS WHENEVER YOU ACCEPT A STANDING REQUEST. If you answer
+        "רות" or "וילקו" to "tell me about X", call this in the same turn
+        — otherwise you will not actually be watching for it, and you will
+        have promised something you cannot deliver.
+
+        Do NOT call it while still clarifying what is wanted, or if you
+        pushed back and it was left unresolved: registering a request that
+        was never agreed holds the other side to something they did not
+        ask for.
 
         `tags` are categories from the mission (vehicle, person, activity).
         `entity_ids` narrow it to one specific thing.

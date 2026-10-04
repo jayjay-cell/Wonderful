@@ -1,0 +1,9 @@
+﻿event_id,start_time,end_time,event_type,description,operator_information,state_updates,tags,entity_ids,reporting_policy,priority,instructions,expires_at
+vis_drop,00:00:20,00:01:30,interval,"IMPROVISED. Visibility dips early, recovers. Tests interval expiry.","הראות ירדה, פחות חדה מקודם",ראות=ירודה,conditions,,required,normal,,
+veh_1,00:00:40,,point,IMPROVISED. First vehicle. Proactive by default.,רכב לבן מגיע מכיוון מערב ועוצר ליד המבנה,,"vehicle,arrival",veh_1,required,normal,,
+veh_2,00:01:40,,point,IMPROVISED. Second vehicle. SILENT unless the trainee asked for every vehicle.,רכב שני מגיע ועוצר ליד הראשון,,"vehicle,arrival",veh_2,subscription,normal,,
+person,00:02:10,,point,IMPROVISED. Key to the solution.,אדם יוצא מהרכב הראשון ונכנס למבנה,,"person,activity",,required,high,זה משמעותי. דווח מיד.,
+veh_1_departs,00:02:50,,point,IMPROVISED. Expires quickly - tests stale handling.,הרכב הראשון עזב,,"vehicle,departure",veh_1,subscription,normal,,00:03:20
+handover,00:03:30,00:04:10,handover,IMPROVISED. Crew rotation. Ordinary dialogue unavailable for 40s.,,,,,on_request,normal,,
+urgent_move,00:03:50,,point,IMPROVISED. During handover AND urgent - comes through anyway.,תנועה נוספת באזור המבנה,,"vehicle,activity",,required,urgent,דחוף. עובר גם בהחלפת צוותים.,
+quiet,00:04:20,00:05:00,interval,IMPROVISED. Nothing happens. Tests that facts stay queryable.,אין שינוי בתמונה,,conditions,,on_request,normal,,

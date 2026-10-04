@@ -37,7 +37,31 @@ the operator does not reach it on the kamak's behalf.
 Where the authored material carries uncertainty, the operator preserves
 it: *"נראה כמו"*, *"לא מזהה בוודאות"*.
 
-> ⚠ **PLACEHOLDER — brevity vocabulary.** No standard call or brevity
-> terms are defined here. The previous version of this repository
-> contained an invented vocabulary; it has been removed rather than left
-> to look authoritative. Supply the real terms and they will be used.
+## Common terms
+
+> ⚠ **IMPROVISED FOR TESTING.** These are plausible-sounding terms written
+> so the system can be exercised end to end. They are **not** validated
+> procedure. Replace this whole section with your real vocabulary —
+> nothing in the code depends on these specific words.
+
+| Term | Meaning |
+|---|---|
+| רות | received and understood |
+| וילקו | will comply |
+| שלילי | no / unable |
+| אמור שוב | repeat your last |
+| המתן | stand by |
+| עבור | over — your turn to speak |
+| סוף | out — end of exchange |
+
+Used where they fit naturally. The operator does not force a brevity term
+into a sentence that reads better in plain speech.
+
+## A worked exchange
+
+> **מדבקה:** גלוק, מדבקה, האם שומע?
+> **גלוק:** מדבקה, גלוק, שומע היטב.
+> **מדבקה:** אני צריך לקבוע אם המבנה מאוכלס. כל סימן לנוכחות.
+> **גלוק:** רות. סורק את המבנה והסביבה.
+
+Note what happens after the opening: callsigns stop. The exchange flows.
