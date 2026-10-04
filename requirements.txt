@@ -1,0 +1,45 @@
+# Maslul dependencies.
+#
+# AIR-GAP NOTE: the deployment target has no internet. To prepare an
+# offline install, run this on a connected machine:
+#
+#     pip download -r requirements.txt -d vendor/
+#
+# then carry vendor/ across and install with no package index:
+#
+#     pip install --no-index --find-links vendor/ -r requirements.txt
+#
+# Versions are pinned with lower bounds that reflect what was VERIFIED on
+# the development machine (see docs/ARCHITECTURE.md §9). langchain moves
+# fast and renamed the agent constructor between 0.x and 1.x -- re-check
+# `pip show langchain` before assuming an API shape from another project.
+
+# --- Core engine (steps 1-2): no LLM, no network ---
+pydantic>=2.9
+PyYAML>=6.0
+python-dotenv>=1.0
+
+# --- Agent loop (step 3) ---
+langchain>=1.4            # create_agent + middleware; NOT 0.x's create_react_agent
+langchain-core>=1.0
+langgraph>=1.2
+typing_extensions>=4.12
+
+# --- API (step 6) ---
+fastapi>=0.115
+uvicorn[standard]>=0.32
+
+# --- Cloud providers: development only, never required at runtime ---
+# Deliberately optional. The air-gapped deployment installs neither, and
+# providers/cloud/* imports them lazily so a missing package is only an
+# error if you actually select that provider. See tests/test_offline.py.
+langchain-anthropic>=1.7 ; extra == "cloud"
+langchain-google-genai>=4.4 ; extra == "cloud"
+
+# --- Local providers (step 7) ---
+# Ollama is reached over plain HTTP on localhost, so it needs no SDK.
+httpx>=0.27
+
+# --- Tests ---
+pytest>=8.0
+pytest-asyncio>=0.24

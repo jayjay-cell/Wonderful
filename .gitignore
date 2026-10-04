@@ -1,0 +1,31 @@
+# Secrets -- NEVER commit. .env holds a real API key; .env.example is the
+# committed template with no values.
+.env
+.env.local
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Local data: session transcripts contain mission content and trainee
+# transmissions, which are training material rather than source code.
+*.db
+*.sqlite3
+
+# Air-gap install: vendored wheels are large and machine-specific.
+vendor/
+
+# Node (ui/, step 6)
+node_modules/
+dist/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
