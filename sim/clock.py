@@ -1,104 +1,105 @@
-"""Mission clocks.
+"""Clocks.
 
-Two implementations behind one interface. The virtual one is not a testing
-afterthought -- it is what makes the simulator's timing testable at all: a
-45-second idle trigger and a 30-minute session both assert in milliseconds
-instead of actually waiting (NFR-3).
+PRODUCTION USES core/lifecycle.py's ExerciseClock, and only that. Real
+time, no multiplier: the exercise runs alongside a video playing in a
+separate player, and any scaling would desynchronise them. The previous
+ScaledClock and AcceleratedClock are gone with the speed selector.
 
-Everything downstream takes a Clock rather than calling time.monotonic()
-itself, so no module needs a special test mode.
+This module holds the TEST clock: same surface, moves only when told, so a
+20-minute exercise asserts in milliseconds with exact ordering.
 """
 
 from __future__ import annotations
 
-import time
-from typing import Protocol
-
-
-class Clock(Protocol):
-    """Mission time in seconds since the session began.
-
-    Deliberately not wall-clock time: a mission can be paused, and tests
-    advance time by hand.
-    """
-
-    def now(self) -> float: ...
-
-
-class RealClock:
-    """Wall-clock mission time, from monotonic time so a system clock
-    adjustment mid-session cannot make mission time jump or run backwards --
-    MissionStateEngine.advance_to rejects a rewind, so that would otherwise
-    end the session."""
-
-    def __init__(self) -> None:
-        self._started = time.monotonic()
-
-    def now(self) -> float:
-        return time.monotonic() - self._started
-
-    def reset(self) -> None:
-        self._started = time.monotonic()
-
-
-class ScaledClock:
-    """Mission time running faster than wall-clock time.
-
-    WHY THIS EXISTS: a bingo-fuel scenario is an hour away at real time,
-    so testing one meant sitting at a terminal for most of an hour. The
-    session's `delivery_speed` previously compressed only SPEECH PACING,
-    which left the mission clock at 1x -- so fuel never visibly drained
-    and timed checkpoints never arrived. A trainer setting "x60" saw
-    nothing happen, which looked like broken triggers.
-
-    Separate from VirtualClock: that one only moves when told, for tests.
-    This one runs on its own, just faster.
-    """
-
-    def __init__(self, multiplier: float = 1.0) -> None:
-        if multiplier <= 0:
-            raise ValueError(f"multiplier must be > 0, got {multiplier}")
-        self._started = time.monotonic()
-        self._multiplier = float(multiplier)
-
-    def now(self) -> float:
-        return (time.monotonic() - self._started) * self._multiplier
-
-    @property
-    def multiplier(self) -> float:
-        return self._multiplier
-
-    def reset(self) -> None:
-        self._started = time.monotonic()
+from core.lifecycle import LifecycleError, Phase
 
 
 class VirtualClock:
-    """Mission time that only moves when told to.
+    """An ExerciseClock whose time only moves on command.
 
-    Lets a test assert exact ordering ("the idle trigger fires at T+45,
-    before the timeline trigger at T+180") with no sleeping and no
-    flakiness.
+    Mirrors the real lifecycle exactly -- including time staying zero
+    until start() -- so a test exercises the same transitions production
+    does, just without waiting.
     """
 
-    def __init__(self, start: float = 0.0) -> None:
-        self._now = start
+    def __init__(self) -> None:
+        self._phase = Phase.PREPARING
+        self._now = 0.0
+        self._frozen = 0.0
+        self._duration: float | None = None
+
+    # -- the ExerciseClock surface ---------------------------------------
+
+    @property
+    def phase(self) -> Phase:
+        return self._phase
+
+    @property
+    def is_running(self) -> bool:
+        return self._phase is Phase.RUNNING
+
+    @property
+    def is_ended(self) -> bool:
+        return self._phase is Phase.ENDED
+
+    @property
+    def duration(self) -> float | None:
+        return self._duration
 
     def now(self) -> float:
+        if self._phase in (Phase.PREPARING, Phase.READY):
+            return 0.0
+        if self._phase in (Phase.PAUSED, Phase.ENDED):
+            return self._frozen
         return self._now
 
-    def advance(self, seconds: float) -> float:
-        """Move forward. Rejects negative input rather than silently
-        clamping, since time running backwards indicates a caller bug."""
-        if seconds < 0:
-            raise ValueError(f"VirtualClock.advance requires seconds >= 0, got {seconds}")
-        self._now += seconds
-        return self._now
+    def is_past_duration(self) -> bool:
+        return self._duration is not None and self.now() >= self._duration
 
-    def set(self, seconds: float) -> float:
+    def mark_ready(self, duration: float | None = None) -> None:
+        if self._phase is not Phase.PREPARING:
+            raise LifecycleError(f"cannot become ready from {self._phase.value}")
+        self._duration = duration
+        self._phase = Phase.READY
+
+    def start(self) -> None:
+        if self._phase is not Phase.READY:
+            raise LifecycleError(f"cannot start from {self._phase.value}")
+        self._now = 0.0
+        self._phase = Phase.RUNNING
+
+    def pause(self) -> None:
+        if self._phase is not Phase.RUNNING:
+            raise LifecycleError(f"cannot pause from {self._phase.value}")
+        self._frozen = self._now
+        self._phase = Phase.PAUSED
+
+    def resume(self) -> None:
+        if self._phase is not Phase.PAUSED:
+            raise LifecycleError(f"cannot resume from {self._phase.value}")
+        self._now = self._frozen
+        self._phase = Phase.RUNNING
+
+    def end(self) -> None:
+        if self._phase is Phase.ENDED:
+            return
+        self._frozen = self.now()
+        self._phase = Phase.ENDED
+
+    # -- test control ----------------------------------------------------
+
+    def set(self, seconds: float) -> None:
+        """Jump mission time. Monotonic: rewinding is a test bug, and
+        silently allowing it would hide an ordering mistake."""
         if seconds < self._now:
             raise ValueError(
-                f"VirtualClock.set({seconds}) would rewind from {self._now}; "
-                "mission time is monotonic"
+                f"set({seconds}) would rewind from {self._now}; mission time "
+                f"is monotonic"
             )
         self._now = seconds
+
+    def advance(self, seconds: float) -> float:
+        if seconds < 0:
+            raise ValueError(f"advance requires seconds >= 0, got {seconds}")
+        self._now += seconds
         return self._now

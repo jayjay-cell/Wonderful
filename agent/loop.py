@@ -44,11 +44,7 @@ from langchain.agents.middleware import (
     ToolErrorMiddleware,
 )
 
-from agent.prompts import build_system_prompt
-from core.models import Mission
-from core.state import MissionStateEngine
 from obs.logging import get_logger
-from tools.mission_tools import build_mission_tools
 
 logger = get_logger("agent.loop")
 
@@ -58,17 +54,15 @@ logger = get_logger("agent.loop")
 DEFAULT_MAX_STEPS = 8
 
 
-def max_steps(mission: Mission | None = None) -> int:
-    """Step limit: env var wins, then the mission's own limit, then 8.
+def max_steps() -> int:
+    """Step limit: env var, else the default.
 
-    Env-first so a limit can be lowered in testing without editing every
+    Env-configurable so it can be lowered in testing without touching a
     mission file.
     """
     from_env = os.environ.get("AGENT_MAX_STEPS", "").strip()
     if from_env.isdigit() and int(from_env) > 0:
         return int(from_env)
-    if mission is not None:
-        return mission.limits.max_steps
     return DEFAULT_MAX_STEPS
 
 
@@ -89,33 +83,32 @@ def _on_tool_error(error: Exception, *args: Any, **kwargs: Any) -> str:
 
 
 def build_agent(
-    mission: Mission,
-    engine: MissionStateEngine,
     model: Any,
+    tools: list[Any],
+    system_prompt: str,
     step_limit: int | None = None,
 ):
-    """Construct the agent for one session.
+    """Construct the agent for one turn.
 
-    `model` is injected rather than built here, so the provider layer owns
-    provider selection and tests can pass a fake model with no network
-    (NFR-2).
+    Tools and prompt are passed in rather than built here: they close over
+    the live exercise, and the caller (sim/turns.py) is what knows it.
+    Keeping this layer ignorant of the domain is what lets every channel
+    share one turn implementation.
 
-    Tools are built per session as closures over this engine, so the
-    session is never a model-suppliable argument -- see
-    tools/mission_tools.py for why that matters.
+    `model` is injected so the provider layer owns provider selection and
+    tests can pass a fake model with no network.
     """
-    limit = step_limit if step_limit is not None else max_steps(mission)
+    limit = step_limit if step_limit is not None else max_steps()
 
     return create_agent(
         model,
-        tools=build_mission_tools(mission, engine),
-        system_prompt=build_system_prompt(mission, engine),
+        tools=tools,
+        system_prompt=system_prompt,
         middleware=[
             # exit_behavior="end" stops cleanly at the limit and returns
-            # what the model has so far. The alternative, "error", would
-            # raise and force every caller to catch it -- a worse default
-            # for a live training session, where a degraded reply beats a
-            # dropped transmission (FR-G2).
+            # what the model has so far. "error" would raise and force
+            # every caller to catch it -- a worse default mid-exercise,
+            # where a degraded reply beats a dropped transmission.
             ModelCallLimitMiddleware(run_limit=limit, exit_behavior="end"),
             ToolErrorMiddleware(on_error=_on_tool_error),
         ],
