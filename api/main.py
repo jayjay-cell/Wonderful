@@ -92,6 +92,17 @@ class LiveSession:
         self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.tick_task: asyncio.Task | None = None
 
+        # Which transport owns the domain loop for this session.
+        #
+        # EXACTLY ONE loop may evaluate triggers, because every loop bumps
+        # the same log.fired_counts and applies effects to the same engine.
+        # Two loops meant a `once: true` trigger was consumed by whichever
+        # saw it first, or fired twice -- once spoken by Gemini Live and
+        # once delivered as SSE text by the text agent, which also made its
+        # own model call. The UI opens the SSE stream for every mode, so
+        # this happened on every Live session.
+        self.domain_owner: str | None = None
+
 
 class QueueChannel:
     """DeliveryChannel that funnels events into a session's queue."""
@@ -217,8 +228,13 @@ async def stream(session_id: str) -> StreamingResponse:
     if live is None:
         raise HTTPException(status_code=404, detail="no such session")
 
-    if live.tick_task is None or live.tick_task.done():
-        live.tick_task = asyncio.create_task(_tick_loop(live))
+    # Gemini Live runs the domain loop inside its own bridge, so the SSE
+    # stream must NOT start a second one. It still streams delivery events
+    # and serves the readings panel -- it just does not drive triggers.
+    if live.domain_owner in (None, "sse"):
+        live.domain_owner = "sse"
+        if live.tick_task is None or live.tick_task.done():
+            live.tick_task = asyncio.create_task(_tick_loop(live))
 
     async def event_source():
         try:
@@ -438,6 +454,22 @@ async def live_voice_socket(socket: WebSocket, session_id: str) -> None:
     prompt = build_system_prompt(live.mission, runner.session.engine,
                                  with_markers=False, for_speech=True)
 
+    # Claim the domain loop. The UI opens the SSE stream for every mode,
+    # so by the time this socket connects the text tick loop is usually
+    # already running -- and it would keep evaluating triggers, applying
+    # effects and making its own model calls against the same engine.
+    # Cancelling it is what makes "exactly one domain loop" true rather
+    # than merely intended.
+    live.domain_owner = "live_voice"
+    if live.tick_task is not None and not live.tick_task.done():
+        live.tick_task.cancel()
+        try:
+            await live.tick_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        live.tick_task = None
+        logger.info("live_voice.took_domain_loop", session_id=session_id)
+
     bridge = LiveVoiceBridge(socket, live, live.mission)
     logger.info("live_voice.connected", session_id=session_id)
     try:
@@ -446,6 +478,9 @@ async def live_voice_socket(socket: WebSocket, session_id: str) -> None:
         logger.exception("live_voice.failed", session_id=session_id,
                          error_code=type(err).__name__, status="error")
     finally:
+        # Release the loop so a reconnect (or a switch back to text) can
+        # claim it again.
+        live.domain_owner = None
         logger.info("live_voice.disconnected", session_id=session_id)
 
 
