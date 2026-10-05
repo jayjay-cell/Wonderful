@@ -2,268 +2,341 @@
 <!--
   Maslul — trainer console.
 
-  Single self-contained file, no build step. A toolchain and a
-  node_modules tree would be two more things to carry into a closed
-  network, for a page that is one console.
+  One self-contained file, no build step.
 
-  DESIGN NOTE. This is a UI that gets operated, not read, so the craft is
-  information design rather than typography: the readouts are the point.
-  The visual language comes from the subject's own world — an instrument
-  panel. Monospace figures with tabular alignment so digits do not jitter
-  as values change, phosphor amber and green for state, and a left rail of
-  live readings that stays visible rather than hiding behind a tab.
+  DESIGN. This is operated, not read, so the craft is information design.
+  Three rules the previous version broke:
 
-  Three details are load-bearing rather than decorative:
-
-  * The typing indicator survives a PAUSE event. Without that a modelled
-    hesitation looks like the app froze — which inverts the entire point
-    of the realism layer.
-  * Sending calls /interrupt FIRST, so cutting him off is a real
-    capability rather than a message queued behind the rest of his
-    transmission.
-  * Hidden readings render differently from visible ones. As the trainer
-    you need to see what he CANNOT, in order to judge whether his answers
-    were honest.
+  * One primary action visible at a time. Preparing shows "prepare";
+    ready shows "start"; running shows the composer. Five buttons in one
+    row left the trainer guessing which to press.
+  * Status reads left to right in one band: what · when · how. The clock
+    previously sat squeezed between two competing pills.
+  * Colour carries meaning only. Slate surfaces, one blue accent for
+    actions, and green/amber/red reserved for state — so an amber chip
+    always means "attention here".
 -->
 <html lang="he" dir="rtl">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Maslul Console</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Heebo:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Assistant:wght@400;500;600;700&display=swap">
 <style>
-/* Layout: command bar across the top, net log centre, instrument rail
-   right, transmit bar fixed at the bottom. Rail drops away under 860px. */
+/* Layout: status band, transcript centre, trainer rail right, one
+   composer at the bottom. Rail collapses under 900px. */
 :root {
-  /* Phosphor on gunmetal — an instrument panel, not a chat app. */
-  --bg:       #0b0f14;
-  --panel:    #111720;
-  --panel-2:  #161d28;
-  --line:     #222c3a;
-  --line-lit: #33455a;
-  --fg:       #dde5ee;
-  --fg-dim:   #7d8c9f;
-  --amber:    #e8a33d;
-  --green:    #4fd48a;
-  --cyan:     #5ab9e8;
-  --red:      #e8615a;
-  --trainee:  #16222f;
-  --operator: #121d18;
-  color-scheme: dark;
+  /* Cool slate. The neutrals carry a blue bias toward the accent, so
+     they read as chosen rather than as inherited grey. */
+  --bg:        #0d1117;
+  --surface:   #151b24;
+  --surface-2: #1c2430;
+  --line:      #252f3d;
+  --line-lit:  #36445a;
+  --fg:        #e6edf3;
+  --fg-2:      #9aa9bd;
+  --fg-3:      #6b7a8f;
 
-  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
-  --sans: "Heebo", -apple-system, "Segoe UI", system-ui, sans-serif;
+  --accent:    #4da3ff;      /* actions only */
+  --ok:        #3fb950;
+  --warn:      #d29922;
+  --bad:       #f85149;
+
+  --trainee:   #16212e;
+  --operator:  #171f1b;
+
+  color-scheme: dark;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --sans: "Assistant", -apple-system, "Segoe UI", system-ui, sans-serif;
+  --r: 6px;
 }
-/* Deliberately single-theme: a mission console is a dark instrument
-   surface, and a light variant would be a different product. Every colour
-   is still an explicit token, so the page looks right on either host
-   background. */
+/* Single theme by choice: a console is a dark instrument surface, and a
+   light variant would be a different product. Every colour is still an
+   explicit token, so the page looks right on any host background. */
 
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--fg);
-  font: 15px/1.55 var(--sans); -webkit-font-smoothing: antialiased;
+  font: 400 15px/1.6 var(--sans);
+  -webkit-font-smoothing: antialiased;
 }
 button, input, select { font: inherit; color: inherit; }
-:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+h1, h2 { margin: 0; font-weight: 600; }
 
-/* ---------- setup ---------- */
+/* ===== setup ===== */
 #setup { min-height: 100%; display: grid; place-items: center;
-         padding-block: 40px; padding-inline: 16px; }
-.card { width: 100%; max-width: 520px; background: var(--panel);
-        border: 1px solid var(--line); border-radius: 4px; padding: 28px 26px 26px; }
-.brand { display: flex; align-items: center; gap: 10px; }
-.brand h1 { margin: 0; font: 600 20px/1.2 var(--mono);
-            letter-spacing: .07em; text-transform: uppercase; }
-.brand .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
-.tag { font: 400 11.5px/1.4 var(--mono); color: var(--fg-dim);
-       letter-spacing: .1em; text-transform: uppercase; margin: 6px 0 22px; }
-label { display: block; font: 500 10.5px/1 var(--mono); color: var(--fg-dim);
-        letter-spacing: .13em; text-transform: uppercase; margin: 18px 0 7px; }
-select, input[type=text] { width: 100%; padding: 10px 12px; background: var(--panel-2);
-        border: 1px solid var(--line); border-radius: 3px; color: var(--fg); }
-select:hover, input[type=text]:hover { border-color: var(--line-lit); }
-.brief { margin-top: 20px; padding: 14px 15px; background: var(--panel-2);
-         border-inline-start: 2px solid var(--amber); border-radius: 0 3px 3px 0;
-         font-size: 13.5px; white-space: pre-wrap; color: #c3cedb; }
-.go { width: 100%; margin-top: 24px; padding: 12px; cursor: pointer;
-      background: var(--amber); color: #161008; border: 0; border-radius: 3px;
-      font: 600 12px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; }
-.go:hover { background: #f0b155; }
-.go:disabled { opacity: .5; cursor: default; }
-.fail { margin-top: 14px; font-size: 13px; color: var(--red); }
-.hint { margin: 7px 0 0; font: 400 11.5px/1.45 var(--mono); color: var(--fg-dim); }
+         padding-block: 48px; padding-inline: 16px; }
+.card { width: 100%; max-width: 480px; }
 
-/* ---------- console ---------- */
+.logo { display: flex; align-items: center; gap: 9px; margin-bottom: 4px; }
+.logo span { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+.logo h1 { font: 600 17px/1 var(--mono); letter-spacing: .14em;
+           text-transform: uppercase; }
+.lede { color: var(--fg-3); font-size: 14px; margin: 0 0 32px; }
+
+.field { margin-bottom: 20px; }
+.field > label {
+  display: block; font: 600 11px/1 var(--mono); color: var(--fg-3);
+  letter-spacing: .12em; text-transform: uppercase; margin-bottom: 8px;
+}
+select, input[type=text] {
+  width: 100%; padding: 11px 13px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--r); color: var(--fg);
+  transition: border-color .12s;
+}
+select:hover, input[type=text]:hover { border-color: var(--line-lit); }
+
+.note {
+  font-size: 13.5px; line-height: 1.65; color: var(--fg-2);
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r); padding: 13px 15px;
+}
+.note b { color: var(--fg); font-weight: 600; }
+
+.brief {
+  margin-top: 20px; padding: 15px 17px; background: var(--surface);
+  border-radius: var(--r); border-inline-start: 3px solid var(--warn);
+  font-size: 14px; line-height: 1.7; white-space: pre-wrap; color: var(--fg-2);
+}
+.brief::before {
+  content: "תדריך"; display: block; font: 600 10.5px/1 var(--mono);
+  color: var(--warn); letter-spacing: .14em; text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.primary {
+  width: 100%; margin-top: 28px; padding: 13px; cursor: pointer;
+  background: var(--accent); color: #06121f; border: 0; border-radius: var(--r);
+  font: 600 14px/1 var(--sans); transition: background .12s;
+}
+.primary:hover { background: #6cb4ff; }
+.primary:disabled { opacity: .45; cursor: default; }
+.error { margin-top: 14px; font-size: 13.5px; color: var(--bad); }
+
+/* ===== console ===== */
 #console { display: none; height: 100%; }
 #console.on { display: grid; grid-template-rows: auto 1fr; }
 
-.bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-       padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
-.bar .ttl { font: 600 13px/1 var(--mono); letter-spacing: .04em; }
-.bar .meta { font: 400 11.5px/1 var(--mono); color: var(--fg-dim); letter-spacing: .06em; }
-.bar .spacer { margin-inline-start: auto; }
-.clock { font: 600 15px/1 var(--mono); letter-spacing: .06em;
-         font-variant-numeric: tabular-nums; }
+/* status band — reads left to right: what · when · how */
+.band {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 11px 18px; background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+.band .name { font-weight: 600; font-size: 14.5px; }
+.band .who { font: 500 12px/1 var(--mono); color: var(--fg-3);
+             letter-spacing: .04em; }
+.band .gap { margin-inline-start: auto; }
 
-.pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px;
-        border: 1px solid var(--line); border-radius: 100px;
-        font: 500 10.5px/1 var(--mono); letter-spacing: .1em;
-        text-transform: uppercase; color: var(--fg-dim); }
-.pill b { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-dim); }
-.pill.live { color: var(--green); border-color: #1d4634; }
-.pill.live b { background: var(--green); animation: pulse 2.2s infinite; }
-.pill.hot { color: var(--amber); border-color: #4a3514; }
-.pill.hot b { background: var(--amber); }
-.pill.off { color: var(--red); border-color: #4a1f1d; }
-.pill.off b { background: var(--red); }
-@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+.clock { font: 600 19px/1 var(--mono); font-variant-numeric: tabular-nums; }
+.clock small { font-size: 12px; color: var(--fg-3); font-weight: 400; }
 
-.body { display: grid; grid-template-columns: 1fr 272px; min-height: 0; }
-@media (max-width: 860px) {
+.tag {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 5px 11px; border-radius: 999px; background: var(--surface-2);
+  border: 1px solid var(--line);
+  font: 600 11px/1 var(--mono); letter-spacing: .07em;
+  text-transform: uppercase; color: var(--fg-2);
+}
+.tag i { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-3); }
+.tag.ok { color: var(--ok); border-color: #1c4428; }
+.tag.ok i { background: var(--ok); animation: beat 2.4s infinite; }
+.tag.warn { color: var(--warn); border-color: #4a3410; }
+.tag.warn i { background: var(--warn); }
+.tag.bad { color: var(--bad); border-color: #4d1f1c; }
+.tag.bad i { background: var(--bad); }
+@keyframes beat { 0%,100% { opacity: 1 } 50% { opacity: .3 } }
+
+.body { display: grid; grid-template-columns: 1fr 300px; min-height: 0; }
+@media (max-width: 900px) {
   .body { grid-template-columns: 1fr; }
   #rail { display: none; }
 }
 
-/* net log */
+/* transcript */
 #net { display: grid; grid-template-rows: 1fr auto; min-width: 0; min-height: 0; }
-#log { overflow-y: auto; padding: 18px 16px 8px;
-       display: flex; flex-direction: column; gap: 9px; }
-.msg { max-width: min(78%, 560px); padding: 9px 13px; border-radius: 3px; min-width: 0; }
-.msg .who { font: 500 10px/1 var(--mono); letter-spacing: .13em;
-            text-transform: uppercase; color: var(--fg-dim); margin-bottom: 5px; }
-.msg .body-t { white-space: pre-wrap; overflow-wrap: anywhere; }
-.from-trainee { align-self: flex-start; background: var(--trainee);
-                border-inline-start: 2px solid var(--cyan); }
-.from-op { align-self: flex-end; background: var(--operator);
-           border-inline-end: 2px solid var(--green); }
-.from-op.initiated { border-inline-end-color: var(--amber); }
-.from-op.urgent { border-inline-end-color: var(--red); }
-.from-op.cut { opacity: .62; }
-.live-partial { opacity: .5; font-style: italic; }
-.garbled { opacity: .55; letter-spacing: .06em; font-style: italic; }
-.stamp { font: 400 10px/1 var(--mono); color: var(--fg-dim); margin-top: 6px; }
-.sys { align-self: center; font: 400 11px/1.45 var(--mono); color: var(--fg-dim);
-       letter-spacing: .04em; text-align: center; max-width: 80%; }
+#log { overflow-y: auto; padding: 22px 18px 10px;
+       display: flex; flex-direction: column; gap: 14px; }
+.turn { max-width: min(80%, 580px); min-width: 0; }
+.turn .label {
+  font: 600 10.5px/1 var(--mono); letter-spacing: .13em;
+  text-transform: uppercase; color: var(--fg-3); margin-bottom: 6px;
+}
+.turn .said {
+  padding: 11px 14px; border-radius: var(--r);
+  white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65;
+}
+.from-trainee { align-self: flex-start; }
+.from-trainee .said { background: var(--trainee);
+                      border-inline-start: 3px solid var(--accent); }
+.from-op { align-self: flex-end; }
+.from-op .said { background: var(--operator);
+                 border-inline-end: 3px solid var(--ok); }
+.from-op.volunteered .said { border-inline-end-color: var(--warn); }
+.from-op.volunteered .label::after { content: " · יזום"; color: var(--warn); }
+.from-op.cut { opacity: .6; }
+.live { opacity: .55; font-style: italic; }
+.garbled { opacity: .5; letter-spacing: .05em; font-style: italic; }
 
-#typing { align-self: flex-end; display: none; gap: 4px; padding: 12px 14px;
-          background: var(--operator); border-inline-end: 2px solid var(--green);
-          border-radius: 3px; }
-#typing.on { display: flex; }
-#typing i { width: 5px; height: 5px; border-radius: 50%; background: var(--green);
-            animation: blink 1.3s infinite; }
-#typing i:nth-child(2) { animation-delay: .18s; }
-#typing i:nth-child(3) { animation-delay: .36s; }
-@keyframes blink { 0%,62%,100% { opacity: .22 } 31% { opacity: 1 } }
-
-@media (prefers-reduced-motion: reduce) {
-  .pill.live b { animation: none; }
-  #typing i { animation: none; opacity: .6; }
+.sysline {
+  align-self: center; max-width: 76%; text-align: center;
+  font: 400 12.5px/1.6 var(--mono); color: var(--fg-3); padding: 4px 0;
 }
 
-/* transmit */
-.tx { padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
-      background: var(--panel); border-top: 1px solid var(--line);
-      display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.tx input { flex: 1 1 180px; min-width: 0; font-family: var(--sans); }
-.ico { padding: 10px 12px; cursor: pointer; background: var(--panel-2);
-       border: 1px solid var(--line); border-radius: 3px;
-       font: 500 11px/1 var(--mono); letter-spacing: .08em;
-       text-transform: uppercase; white-space: nowrap; }
-.ico:hover { border-color: var(--line-lit); background: #1a2230; }
-.ico.armed { background: #2a1512; border-color: #4a1f1d; color: var(--red); }
-.send { background: var(--cyan); border-color: var(--cyan);
-        color: #06151e; font-weight: 600; }
-.go-ex { background: var(--amber); border-color: var(--amber);
-         color: #161008; font-weight: 600; }
-.go-ex:hover { background: #f0b155; border-color: #f0b155; }
-.send:hover { background: #76c7ee; border-color: #76c7ee; }
+#typing { align-self: flex-end; display: none; }
+#typing.on { display: block; }
+#typing div {
+  display: flex; gap: 5px; padding: 15px 16px; background: var(--operator);
+  border-inline-end: 3px solid var(--ok); border-radius: var(--r);
+}
+#typing i { width: 5px; height: 5px; border-radius: 50%; background: var(--ok); }
+#typing i:nth-child(1) { animation: pulse 1.4s infinite; }
+#typing i:nth-child(2) { animation: pulse 1.4s .2s infinite; }
+#typing i:nth-child(3) { animation: pulse 1.4s .4s infinite; }
+@keyframes pulse { 0%,65%,100% { opacity: .2 } 30% { opacity: 1 } }
+@media (prefers-reduced-motion: reduce) {
+  .tag.ok i, #typing i { animation: none; opacity: .65; }
+}
 
-/* instrument rail */
-#rail { background: var(--panel); border-inline-start: 1px solid var(--line);
-        overflow-y: auto; padding: 16px 14px 24px; min-width: 0; }
-#rail h2 { margin: 0 0 10px; font: 500 10px/1 var(--mono); color: var(--fg-dim);
-           letter-spacing: .14em; text-transform: uppercase; }
-#rail .group + h2 { margin-top: 22px; }
-.rd { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: baseline;
-      padding: 7px 0; border-bottom: 1px solid var(--line); }
-.rd .k { font-size: 12.5px; color: #aebbc9; min-width: 0; overflow-wrap: anywhere; }
-.rd .v { font: 500 13.5px/1 var(--mono); font-variant-numeric: tabular-nums;
-         white-space: nowrap; }
-.rd .v u { text-decoration: none; color: var(--fg-dim); font-size: 10.5px;
-           margin-inline-start: 3px; }
-.rd.moving .v { color: var(--cyan); }
-.rd.blind { opacity: .55; }
-.rd.blind .k::after { content: "מוסתר"; font: 400 9px/1 var(--mono);
-       letter-spacing: .06em; color: var(--amber); border: 1px solid #4a3514;
-       border-radius: 2px; padding: 2px 4px; margin-inline-start: 6px;
-       vertical-align: 1px; white-space: nowrap; }
-.chip { display: inline-block; margin: 0 4px 4px 0; padding: 3px 7px;
-        background: var(--panel-2); border: 1px solid var(--line); border-radius: 2px;
-        font: 400 10.5px/1.3 var(--mono); color: #9fb0c2; }
-.chip.hot { color: var(--amber); border-color: #4a3514; }
-.none { font: 400 11px/1 var(--mono); color: var(--fg-dim); }
+/* composer — one primary action, secondary controls set apart */
+.composer {
+  padding: 14px 18px calc(14px + env(safe-area-inset-bottom, 0px));
+  background: var(--surface); border-top: 1px solid var(--line);
+  display: flex; gap: 10px; align-items: center;
+}
+.composer input { flex: 1; min-width: 0; }
+.btn {
+  padding: 11px 15px; cursor: pointer; background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: var(--r);
+  font: 500 13.5px/1 var(--sans); white-space: nowrap;
+  transition: border-color .12s, background .12s;
+}
+.btn:hover { border-color: var(--line-lit); background: #222c3a; }
+.btn.go { background: var(--accent); border-color: var(--accent);
+          color: #06121f; font-weight: 600; }
+.btn.go:hover { background: #6cb4ff; border-color: #6cb4ff; }
+.btn.on { background: #2b1a10; border-color: #4a3410; color: var(--warn); }
+.btn.quiet { color: var(--fg-3); }
+.btn.quiet:hover { color: var(--fg); }
+.sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 2px; }
+
+/* gate — the one action that matters before the exercise runs */
+.gate {
+  padding: 18px; background: var(--surface); border-top: 1px solid var(--line);
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+}
+.gate p { margin: 0; flex: 1; min-width: 200px;
+          font-size: 13.5px; color: var(--fg-2); line-height: 1.6; }
+.gate .btn.go { padding: 13px 24px; font-size: 14.5px; }
+
+/* trainer rail */
+#rail {
+  background: var(--surface); border-inline-start: 1px solid var(--line);
+  overflow-y: auto; padding: 20px 16px 28px; min-width: 0;
+}
+#rail h2 {
+  font: 600 10.5px/1 var(--mono); color: var(--fg-3);
+  letter-spacing: .14em; text-transform: uppercase;
+  padding-bottom: 9px; border-bottom: 1px solid var(--line); margin-bottom: 12px;
+}
+#rail h2:not(:first-child) { margin-top: 26px; }
+
+.read { display: flex; justify-content: space-between; gap: 10px;
+        align-items: baseline; padding: 6px 0; }
+.read dt { color: var(--fg-2); font-size: 13.5px; min-width: 0;
+           overflow-wrap: anywhere; }
+.read dd { margin: 0; font: 500 13.5px/1 var(--mono);
+           font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.obs { font-size: 13px; line-height: 1.6; color: var(--fg-2);
+       padding: 6px 0 6px 10px; border-inline-start: 2px solid var(--line); }
+.obs.now { border-inline-start-color: var(--ok); color: var(--fg); }
+.obs.was { color: var(--fg-3); }
+
+.pill {
+  display: inline-block; margin: 0 0 6px; padding: 5px 10px;
+  background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: var(--r); font-size: 12.5px; color: var(--fg-2);
+  max-width: 100%; overflow-wrap: anywhere;
+}
+.pill.due { color: var(--warn); border-color: #4a3410; background: #241a0e; }
+.empty { font: 400 12.5px/1 var(--mono); color: var(--fg-3); }
 </style>
 </head>
 <body>
 
 <section id="setup">
   <div class="card">
-    <div class="brand"><span class="dot"></span><h1>Maslul</h1></div>
-    <p class="tag">סימולטור אימון · רשת קשר</p>
+    <div class="logo"><span></span><h1>Maslul</h1></div>
+    <p class="lede">מאמן שיחה לסרטון משימה מוקלט</p>
 
-    <label for="mission">משימה</label>
-    <select id="mission"></select>
+    <div class="field">
+      <label for="mission">תרגיל</label>
+      <select id="mission"></select>
+    </div>
 
-    <label for="mode">ערוץ</label>
-    <select id="mode">
-      <option value="live" selected>קולי · Gemini Live</option>
-      <option value="voice">קולי · ElevenLabs</option>
-      <option value="text">טקסט</option>
-    </select>
+    <div class="field">
+      <label for="mode">ערוץ</label>
+      <select id="mode">
+        <option value="live" selected>קולי — Gemini Live</option>
+        <option value="voice">קולי — ElevenLabs</option>
+        <option value="text">טקסט</option>
+      </select>
+    </div>
 
-    <p class="hint">
-      הסרטון מתנגן בנגן נפרד. לאחר ההכנה — לחץ "התחל תרגיל" והפעל את
-      הסרטון באותו רגע. השעון מודד זמן מתחילת ההקלטה, בזמן אמת.
+    <p class="note">
+      הסרטון מתנגן ב<b>נגן נפרד</b>. ההכנה לא מפעילה את השעון —
+      לחץ "התחל תרגיל" והפעל את הסרטון באותו רגע.
     </p>
 
     <div id="brief" class="brief" hidden></div>
-    <div id="fail" class="fail" hidden></div>
-    <button id="go" class="go">הכן תרגיל</button>
+    <div id="error" class="error" hidden></div>
+    <button id="prepare" class="primary">הכן תרגיל</button>
   </div>
 </section>
 
 <section id="console">
-  <header class="bar">
-    <span class="ttl" id="ttl"></span>
-    <span class="meta" id="callsigns"></span>
-    <span class="spacer"></span>
-    <span class="pill" id="link"><b></b><span>ממתין</span></span>
-    <span class="clock" id="clock">T+00:00</span>
-    <span class="pill" id="phase"><b></b><span>הכנה</span></span>
+  <header class="band">
+    <span class="name" id="name"></span>
+    <span class="who" id="who"></span>
+    <span class="gap"></span>
+    <span class="tag" id="phase"><i></i><span>הכנה</span></span>
+    <span class="clock" id="clock">00:00<small> / --:--</small></span>
+    <span class="tag" id="link"><i></i><span>טקסט</span></span>
   </header>
 
   <div class="body">
     <div id="net">
       <div id="log">
-        <div id="typing"><i></i><i></i><i></i></div>
+        <div id="typing"><div><i></i><i></i><i></i></div></div>
       </div>
-      <form class="tx" id="tx">
+
+      <!-- Before the exercise runs: ONE action, with its context. -->
+      <div class="gate" id="gate">
+        <p>מוכן. לחץ והפעל את הסרטון באותו רגע.</p>
+        <button type="button" class="btn go" id="begin">התחל תרגיל</button>
+      </div>
+
+      <!-- While running: transmit, then secondary controls. -->
+      <form class="composer" id="composer" hidden>
         <input id="text" type="text" placeholder="תשדורת…" autocomplete="off">
-        <button type="submit" class="ico send">שלח</button>
-        <button type="button" class="ico" id="mic" hidden>מיקרופון</button>
-        <button type="button" class="ico go-ex" id="begin">התחל תרגיל</button>
-        <button type="button" class="ico" id="hold" hidden>השהה</button>
-        <button type="button" class="ico" id="end">סיים</button>
+        <button type="submit" class="btn go">שלח</button>
+        <span class="sep"></span>
+        <button type="button" class="btn" id="mic" hidden>מיקרופון</button>
+        <button type="button" class="btn" id="hold">השהה</button>
+        <button type="button" class="btn quiet" id="stop">סיים</button>
       </form>
     </div>
 
     <aside id="rail">
-      <h2>לוח מכשירים · תצוגת מדריך</h2>
-      <div class="group" id="readings"><span class="none">—</span></div>
-      <h2>נקודות שהופעלו</h2>
-      <div class="group" id="fired"><span class="none">אין</span></div>
+      <h2>מה הצוות רואה</h2>
+      <dl id="facts" style="margin:0"><span class="empty">—</span></dl>
+      <h2>תצפיות</h2>
+      <div id="obs"><span class="empty">אין</span></div>
+      <h2>התחייבויות</h2>
+      <div id="commit"><span class="empty">אין</span></div>
     </aside>
   </div>
 </section>
@@ -275,42 +348,45 @@ const API = location.origin.includes("5173") ? "http://localhost:8000" : "";
 const $ = (id) => document.getElementById(id);
 
 let session = null, stream = null, voice = null;
-let current = null, partialNode = null, tone = "baseline", typingTimer = null;
+let turn = null, partial = null, typingTimer = null;
 
 // ---------- setup ----------
 let missions = [];
 try {
   missions = (await (await fetch(`${API}/missions`)).json()).missions;
 } catch {
-  fail("השרת לא זמין. הפעל: python run.py");
+  showError("השרת לא זמין. הפעל: python run.py");
 }
+
 for (const m of missions) {
   const option = document.createElement("option");
   option.value = m.file;
-  option.textContent = m.error ? `${m.file} · שגיאה` : m.title;
+  option.textContent = m.error ? `${m.file} — שגיאה` : m.title;
   option.disabled = Boolean(m.error);
   $("mission").append(option);
 }
+
 const showBrief = () => {
   const m = missions.find((x) => x.file === $("mission").value);
-  $("brief").hidden = !m?.briefing;
-  $("brief").textContent = m?.briefing ?? "";
+  $("brief").hidden = !m?.trainee_briefing;
+  $("brief").textContent = m?.trainee_briefing ?? "";
 };
 $("mission").onchange = showBrief;
 showBrief();
 
-function fail(message) {
-  $("fail").hidden = false;
-  $("fail").textContent = message;
+function showError(message) {
+  $("error").hidden = false;
+  $("error").textContent = message;
 }
 
-$("go").onclick = async () => {
-  $("go").disabled = true;
-  $("fail").hidden = true;
+// ---------- prepare (does NOT start the clock) ----------
+$("prepare").onclick = async () => {
+  $("prepare").disabled = true;
+  $("error").hidden = true;
 
-  // Unlock audio on this click. A browser suspends an AudioContext that
-  // was not created during a user gesture, and the symptom is silence
-  // with no error anywhere.
+  // Unlock audio on this click: a browser suspends an AudioContext not
+  // created during a user gesture, and the symptom is silence with no
+  // error anywhere.
   try {
     const probe = new AudioContext();
     await probe.resume();
@@ -327,181 +403,205 @@ $("go").onclick = async () => {
     });
     if (!res.ok) throw new Error((await res.json()).detail ?? "failed");
     session = await res.json();
-    start();
+    openConsole();
   } catch (err) {
-    $("go").disabled = false;
-    fail(String(err.message ?? err));
+    $("prepare").disabled = false;
+    showError(String(err.message ?? err));
   }
 };
 
-function start() {
+function openConsole() {
   $("setup").hidden = true;
   $("console").classList.add("on");
-  $("ttl").textContent = session.title;
-  $("callsigns").textContent =
-    `${session.operator_callsign} · אתה ${session.trainee_callsign}`;
-  $("text").focus();
+  $("name").textContent = session.title;
+  $("who").textContent =
+    `${session.operator_callsign} ← ${session.trainee_callsign}`;
+  if (session.duration_seconds) {
+    $("clock").querySelector("small").textContent =
+      ` / ${stamp(session.duration_seconds)}`;
+  }
 
   stream = new EventSource(`${API}/sessions/${session.session_id}/stream`);
-  stream.onmessage = (event) => onDelivery(JSON.parse(event.data));
+  stream.onmessage = (event) => onServer(JSON.parse(event.data));
 
   const mode = $("mode").value;
-  if (mode === "text") setLink("live", "טקסט");
+  if (mode === "text") setTag("link", "", "טקסט");
   else connectVoice(mode);
 
-  setInterval(pollState, 1800);
-  pollState();
+  setInterval(poll, 1500);
+  poll();
 }
 
-function setLink(kind, label) {
-  const el = $("link");
-  el.className = `pill ${kind}`;
+const stamp = (seconds) => {
+  const whole = Math.floor(seconds);
+  return `${String(Math.floor(whole / 60)).padStart(2, "0")}:` +
+         `${String(whole % 60).padStart(2, "0")}`;
+};
+
+function setTag(id, kind, label) {
+  const el = $(id);
+  el.className = `tag ${kind}`;
   el.lastElementChild.textContent = label;
 }
+
+// ---------- lifecycle ----------
+// Starting is SEPARATE from preparing: the trainer presses play on the
+// video in the same moment, and mission time stayed at zero through setup
+// so the two stay in step.
+$("begin").onclick = async () => {
+  await post(`/sessions/${session.session_id}/start`);
+  $("gate").hidden = true;
+  $("composer").hidden = false;
+  $("text").focus();
+  system("התרגיל התחיל — הפעל את הסרטון עכשיו");
+};
+
+$("hold").onclick = async () => {
+  const paused = $("hold").dataset.on === "1";
+  await post(`/sessions/${session.session_id}/${paused ? "resume" : "pause"}`);
+  $("hold").dataset.on = paused ? "" : "1";
+  $("hold").textContent = paused ? "השהה" : "המשך";
+  $("hold").classList.toggle("on", !paused);
+  // No control of the external player; the trainer pauses it separately.
+  system(paused ? "התרגיל ממשיך" : "התרגיל מושהה — השהה גם את הסרטון");
+};
+
+$("stop").onclick = async () => {
+  await voice?.close();
+  await post(`/sessions/${session.session_id}/end`);
+  stream?.close();
+  location.reload();
+};
 
 // ---------- voice ----------
 async function connectVoice(mode) {
   $("mic").hidden = false;
-  setLink("hot", "מתחבר");
+  setTag("link", "warn", "מתחבר");
   voice = new VoiceClient({
     sessionId: session.session_id, apiBase: API,
     endpoint: mode, onEvent: onVoice,
   });
   try {
     await voice.connect();
-    setLink("live", "מקשיב");
+    setTag("link", "ok", "מקשיב");
     $("text").placeholder = "דבר, או הקלד אם לא זוהה…";
   } catch (err) {
     voice = null;
-    setLink("off", "ללא קול");
-    sys(`קול לא זמין: ${err.message}. ממשיכים בטקסט.`);
+    setTag("link", "bad", "ללא קול");
+    system(`קול לא זמין: ${err.message} — ממשיכים בטקסט`);
   }
 }
 
 function onVoice(ev) {
   switch (ev.type) {
     case "voice_ready":
-      setLink("live", "מקשיב");
+      setTag("link", "ok", "מקשיב");
       break;
 
     case "partial_transcript":
-      // Shown live and dimmed, so a misheard brevity code is visible
-      // before the turn is committed.
-      if (!partialNode) {
-        partialNode = addMsg("trainee", "", {});
-        partialNode.querySelector(".body-t").classList.add("live-partial");
+      // Shown live and dimmed, so a misheard term is visible before the
+      // turn is committed.
+      if (!partial) {
+        partial = addTurn("trainee", "");
+        partial.querySelector(".said").classList.add("live");
       }
-      partialNode.querySelector(".body-t").textContent = ev.text;
-      scrollLog();
+      partial.querySelector(".said").textContent = ev.text;
+      scroll();
       break;
 
     case "final_transcript": {
-      const body = partialNode?.querySelector(".body-t");
-      if (body) {
-        body.classList.remove("live-partial");
-        body.textContent = ev.text;
-        partialNode = null;
+      const said = partial?.querySelector(".said");
+      if (said) {
+        said.classList.remove("live");
+        said.textContent = ev.text;
+        partial = null;
       } else {
-        addMsg("trainee", ev.text, {});
+        addTurn("trainee", ev.text);
       }
       break;
     }
 
     case "counterpart_text":
-      // Gemini Live transcribes its own speech, so the log is built from
+      // Gemini Live transcribes its own speech, so the log builds from
       // text events rather than delivery chunks.
-      if (!current) current = { node: null, origin: "reactive" };
-      if (!current.node) current.node = addMsg("op", "", current);
-      current.node.querySelector(".body-t").textContent += ev.text;
-      scrollLog();
+      if (!turn) turn = { node: null };
+      if (!turn.node) turn.node = addTurn("op", "", {});
+      turn.node.querySelector(".said").textContent += ev.text;
+      scroll();
       break;
 
     case "barge_in":
-      setLink("hot", "קוטע");
-      setTimeout(() => setLink("live", "מקשיב"), 900);
-      break;
-
-    case "initiated":
-      sys(`דיווח יזום · ${ev.trigger_id}`);
+      setTag("link", "warn", "קוטע");
+      setTimeout(() => setTag("link", "ok", "מקשיב"), 900);
       break;
 
     case "turn_complete":
-      current = null;
+      turn = null;
       showTyping(false);
       break;
 
+    case "error":
+      system(ev.message || "שגיאה בקול");
+      break;
+
     case "audio_error":
-      sys(`בעיה בהשמעה: ${ev.message}`);
+      system(`בעיה בהשמעה: ${ev.message}`);
       break;
 
     case "voice_closed":
-      setLink("off", "התנתק");
+      setTag("link", "bad", "התנתק");
       break;
   }
 }
 
-// ---------- delivery (text channel) ----------
-function onDelivery(ev) {
+// ---------- server events ----------
+function onServer(ev) {
   switch (ev.type) {
-    case "utterance_start":
-      current = { node: null, origin: ev.origin, trigger: ev.trigger_id };
-      tone = "baseline";
-      break;
-
-    case "typing_start":
-      showTyping(true);
-      break;
-
-    case "pause":
-      // Keep the indicator ALIVE through a hesitation. Hiding it here
-      // makes a modelled pause look like a frozen app.
-      showTyping(true);
-      break;
-
-    case "tone_shift":
-      tone = ev.tone;
-      break;
-
-    case "chunk": {
+    case "utterance": {
+      const who = ev.speaker === "trainee" ? "trainee" : "op";
+      // An unprompted report is marked: distinguishing what the crew
+      // volunteered from what it was asked is the point of a debrief.
+      const volunteered = ev.origin === "report" ||
+                          ev.origin === "briefing_request";
+      if (voice && who === "op") break;   // voice renders its own
       showTyping(false);
-      if (!current) current = { node: null, origin: "reactive" };
-      if (!current.node) current.node = addMsg("op", "", current);
-      const span = document.createElement("span");
-      span.textContent = (current.node.dataset.started ? " " : "") + ev.text;
-      if (ev.garbled) span.className = "garbled";
-      current.node.querySelector(".body-t").append(span);
-      current.node.dataset.started = "1";
-      if (tone === "urgent") current.node.classList.add("urgent");
-      scrollLog();
+      addTurn(who, ev.text, { volunteered });
       break;
     }
-
-    case "self_correction":
-      if (current?.node) {
-        const dash = document.createElement("span");
-        dash.style.color = "var(--fg-dim)";
-        dash.textContent = " — ";
-        current.node.querySelector(".body-t").append(dash);
-      }
-      break;
-
-    case "interrupted":
-      showTyping(false);
-      if (current?.node) {
-        current.node.classList.add("cut");
-        const stamp = document.createElement("div");
-        stamp.className = "stamp";
-        stamp.textContent = "נקטע";
-        current.node.append(stamp);
-      }
-      current = null;
-      break;
-
-    case "utterance_end":
-      showTyping(false);
-      current = null;
-      break;
+    case "started": system("התרגיל התחיל"); break;
+    case "paused":  system("מושהה"); break;
+    case "resumed": system("ממשיך"); break;
+    case "ended":   system("התרגיל הסתיים"); break;
   }
+}
+
+function addTurn(who, text, info) {
+  const wrap = document.createElement("div");
+  wrap.className = `turn ${who === "trainee" ? "from-trainee" : "from-op"}`;
+  if (info?.volunteered) wrap.classList.add("volunteered");
+
+  const label = document.createElement("div");
+  label.className = "label";
+  label.textContent = who === "trainee"
+    ? session.trainee_callsign : session.operator_callsign;
+  wrap.append(label);
+
+  const said = document.createElement("div");
+  said.className = "said";
+  said.textContent = text;
+  wrap.append(said);
+
+  $("log").insertBefore(wrap, $("typing"));
+  scroll();
+  return wrap;
+}
+
+function system(text) {
+  const el = document.createElement("div");
+  el.className = "sysline";
+  el.textContent = text;
+  $("log").insertBefore(el, $("typing"));
+  scroll();
 }
 
 function showTyping(on) {
@@ -509,232 +609,132 @@ function showTyping(on) {
   const el = $("typing");
   if (!on) { el.classList.remove("on"); return; }
   el.classList.add("on");
-  $("log").append(el);          // keep it last in the log
-  scrollLog();
-  // Safety net: a missed end event must not spin forever, which would
-  // read as a hung session.
+  $("log").append(el);
+  scroll();
+  // A missed end event must not spin forever, which reads as a hang.
   typingTimer = setTimeout(() => el.classList.remove("on"), 30000);
 }
 
-function addMsg(who, text, info) {
-  const wrap = document.createElement("div");
-  wrap.className = who === "trainee" ? "msg from-trainee" : "msg from-op";
-  if (info?.origin === "initiated") wrap.classList.add("initiated");
-
-  const label = document.createElement("div");
-  label.className = "who";
-  label.textContent = who === "trainee"
-    ? session.trainee_callsign
-    : session.operator_callsign + (info?.origin === "initiated" ? " · יזום" : "");
-  wrap.append(label);
-
-  const body = document.createElement("div");
-  body.className = "body-t";
-  body.textContent = text;
-  wrap.append(body);
-
-  $("log").insertBefore(wrap, $("typing"));
-  scrollLog();
-  return wrap;
-}
-
-function sys(text) {
-  const el = document.createElement("div");
-  el.className = "sys";
-  el.textContent = text;
-  $("log").insertBefore(el, $("typing"));
-  scrollLog();
-}
-
-const scrollLog = () => { $("log").scrollTop = $("log").scrollHeight; };
+const scroll = () => { $("log").scrollTop = $("log").scrollHeight; };
 
 // ---------- transmit ----------
-$("tx").onsubmit = async (event) => {
+$("composer").onsubmit = async (event) => {
   event.preventDefault();
   const text = $("text").value.trim();
   if (!text) return;
   $("text").value = "";
-  addMsg("trainee", text, {});
+  addTurn("trainee", text);
+  showTyping(true);
 
-  // Interrupt FIRST, so cutting him off is real rather than a message
-  // queued behind the rest of his transmission.
   if (voice) {
     voice.interrupt();
     voice.sendText(text);
     return;
   }
-  await post(`/sessions/${session.session_id}/interrupt`);
   await post(`/sessions/${session.session_id}/messages`, { text });
-};
-
-let composing = false;
-$("text").oninput = () => {
-  const now = $("text").value.length > 0;
-  if (now === composing) return;
-  composing = now;
-  // Feeds the suppression guard: he waits rather than talking over a
-  // half-written transmission.
-  post(`/sessions/${session.session_id}/composing`, { composing: now });
 };
 
 $("mic").onclick = () => {
   if (!voice) return;
   const muting = !voice.muted;
   voice.setMuted(muting);
-  $("mic").classList.toggle("armed", muting);
+  $("mic").classList.toggle("on", muting);
   $("mic").textContent = muting ? "מושתק" : "מיקרופון";
-  setLink(muting ? "hot" : "live", muting ? "מושתק" : "מקשיב");
-};
-
-// Starting the exercise is SEPARATE from preparing it: the trainer
-// presses play on the video in the same moment, and mission time has
-// stayed at zero through setup so the two stay in step.
-$("begin").onclick = async () => {
-  await post(`/sessions/${session.session_id}/start`);
-  $("begin").hidden = true;
-  $("hold").hidden = false;
-  $("text").focus();
-  sys("התרגיל התחיל. הפעל את הסרטון עכשיו.");
-};
-
-$("hold").onclick = async () => {
-  const paused = $("hold").dataset.paused === "1";
-  await post(`/sessions/${session.session_id}/${paused ? "resume" : "pause"}`);
-  $("hold").dataset.paused = paused ? "" : "1";
-  $("hold").textContent = paused ? "השהה" : "המשך";
-  $("hold").classList.toggle("armed", !paused);
-  // No control of the external player: the trainer pauses it separately.
-  sys(paused ? "התרגיל ממשיך." : "התרגיל מושהה. השהה גם את הסרטון.");
-};
-
-$("end").onclick = async () => {
-  await voice?.close();
-  await post(`/sessions/${session.session_id}/end`);
-  stream?.close();
-  location.reload();
+  setTag("link", muting ? "warn" : "ok", muting ? "מושתק" : "מקשיב");
 };
 
 async function post(path, body) {
   try {
-    await fetch(API + path, {
+    const res = await fetch(API + path, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body ?? {}),
     });
-  } catch { /* a failed signal must never break the conversation */ }
+    return res.ok ? await res.json() : null;
+  } catch { return null; }
 }
 
-// ---------- instrument rail ----------
-// Shows the FULL state, including what the operator cannot see: to judge
-// whether his answers were honest you need to know what he does not.
-const PHASE_LABEL = {
-  preparing: "הכנה", ready: "מוכן", running: "פעיל",
-  paused: "מושהה", ended: "הסתיים",
-};
-const PHASE_KIND = {
-  preparing: "", ready: "hot", running: "live", paused: "hot", ended: "off",
+// ---------- trainer rail ----------
+// Shows what the CREW can see, plus what it has agreed to report. Judging
+// whether an answer was honest means knowing what the crew had.
+const PHASE = {
+  preparing: ["", "הכנה"], ready: ["warn", "מוכן"],
+  running: ["ok", "פעיל"], paused: ["warn", "מושהה"],
+  ended: ["bad", "הסתיים"],
 };
 
-async function pollState() {
+async function poll() {
   if (!session) return;
   try {
     const res = await fetch(`${API}/sessions/${session.session_id}/state`);
     if (!res.ok) return;
     const state = await res.json();
 
-    const seconds = Math.floor(state.mission_seconds);
-    $("clock").textContent =
-      `T+${String(Math.floor(seconds / 60)).padStart(2, "0")}:` +
-      `${String(seconds % 60).padStart(2, "0")}`;
-
-    const phaseEl = $("phase");
-    phaseEl.className = `pill ${PHASE_KIND[state.phase] ?? ""}`;
-    phaseEl.lastElementChild.textContent =
-      PHASE_LABEL[state.phase] ?? state.phase;
+    $("clock").firstChild.textContent = stamp(state.mission_seconds);
+    const [kind, label] = PHASE[state.phase] ?? ["", state.phase];
+    setTag("phase", kind, label);
 
     if (state.phase === "running") {
-      $("begin").hidden = true;
-      $("hold").hidden = false;
+      $("gate").hidden = true;
+      $("composer").hidden = false;
     }
 
-    // The TRAINER's panel: facts the crew can see, plus what it has
-    // agreed to report. Judging whether an answer was honest means
-    // knowing what the crew could and could not see.
-    const rail = $("readings");
-    rail.textContent = "";
-
-    for (const [key, value] of Object.entries(state.operator_facts ?? {})) {
-      rail.append(row(key, String(value)));
+    const facts = $("facts");
+    facts.textContent = "";
+    const entries = Object.entries(state.operator_facts ?? {});
+    if (!entries.length) facts.append(empty("—"));
+    for (const [key, value] of entries) {
+      const row = document.createElement("div");
+      row.className = "read";
+      const dt = document.createElement("dt");
+      dt.textContent = key;
+      const dd = document.createElement("dd");
+      dd.textContent = String(value);
+      row.append(dt, dd);
+      facts.append(row);
     }
 
-    const current = (state.observations ?? []).filter((o) => o.is_current);
-    const past = (state.observations ?? []).filter((o) => !o.is_current);
-
-    if (current.length) {
-      rail.append(heading("כרגע"));
-      for (const o of current) rail.append(note(o.information));
-    }
-    if (past.length) {
-      rail.append(heading("קודם בסורטי"));
-      for (const o of past) rail.append(note(o.information, true));
+    // Observations, current first then past.
+    const obs = $("obs");
+    obs.textContent = "";
+    const all = state.observations ?? [];
+    if (!all.length) obs.append(empty("אין"));
+    for (const o of [...all].sort((a, b) => b.is_current - a.is_current)) {
+      const el = document.createElement("div");
+      el.className = `obs ${o.is_current ? "now" : "was"}`;
+      el.textContent = `${stamp(o.at_seconds)} · ${o.information}`;
+      obs.append(el);
     }
     if (state.handover_active) {
-      rail.append(heading("החלפת צוותים"));
-      rail.append(note("שיחה רגילה לא זמינה", true));
+      const el = document.createElement("div");
+      el.className = "obs was";
+      el.textContent = "החלפת צוותים — שיחה רגילה לא זמינה";
+      obs.append(el);
     }
 
-    const box = $("fired");
+    const box = $("commit");
     box.textContent = "";
     const commitments = state.commitments ?? [];
     const owed = state.reports_owed ?? [];
-    if (!commitments.length && !owed.length) {
-      const none = document.createElement("span");
-      none.className = "none";
-      none.textContent = "אין";
-      box.append(none);
-    }
+    if (!commitments.length && !owed.length) box.append(empty("אין"));
     for (const c of commitments) {
-      const chip = document.createElement("span");
-      chip.className = "chip";
-      chip.textContent = c.description || [...c.tags, ...c.entity_ids].join(", ");
-      box.append(chip);
+      const el = document.createElement("span");
+      el.className = "pill";
+      el.textContent = c.description || [...c.tags, ...c.entity_ids].join(", ");
+      box.append(el);
     }
     for (const id of owed) {
-      const chip = document.createElement("span");
-      chip.className = "chip hot";
-      chip.textContent = `חייב לדווח · ${id}`;
-      box.append(chip);
+      const el = document.createElement("span");
+      el.className = "pill due";
+      el.textContent = `ממתין לדיווח · ${id}`;
+      box.append(el);
     }
   } catch { /* the rail is advisory; a failed poll must not interrupt */ }
 }
 
-function row(key, value) {
-  const el = document.createElement("div");
-  el.className = "rd";
-  const k = document.createElement("span");
-  k.className = "k";
-  k.textContent = key;
-  const v = document.createElement("span");
-  v.className = "v";
-  v.textContent = value;
-  el.append(k, v);
-  return el;
-}
-
-function heading(text) {
-  const el = document.createElement("h2");
+function empty(text) {
+  const el = document.createElement("span");
+  el.className = "empty";
   el.textContent = text;
-  el.style.marginTop = "18px";
-  return el;
-}
-
-function note(text, dim = false) {
-  const el = document.createElement("div");
-  el.className = "rd";
-  if (dim) el.classList.add("blind");
-  const k = document.createElement("span");
-  k.className = "k";
-  k.textContent = text;
-  el.append(k);
   return el;
 }
 </script>
