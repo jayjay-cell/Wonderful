@@ -26,13 +26,13 @@ WHAT THIS PATH GIVES UP, stated plainly:
 
 WHAT IT GAINS:
 
-  * Roughly 1.3s to first audio, versus the cascade's 1.5-2.5s.
+  * Roughly 1.3s to first audio.
   * Natural interruption handled inside the model.
   * No second vendor, no second key.
 
 Both paths therefore stay in the codebase. This is the honest comparison
 the architecture was meant to permit, not a replacement: see
-docs/ARCHITECTURE.md ADR-2 for why the cascade remains the default.
+docs/ARCHITECTURE.md "Channels" for the voice decision and its limits.
 
 AUDIO FORMATS, which differ per direction and are easy to get wrong:
     input   16 kHz, 16-bit PCM, mono
@@ -66,6 +66,7 @@ class GeminiLiveProvider:
     name = "gemini_live"
 
     def __init__(self, language: str = "he") -> None:
+        """Read the Live model, voice and key from the environment."""
         self.language = language
         self._api_key = (
             os.environ.get("GEMINI_API_KEY", "").strip()
@@ -79,9 +80,11 @@ class GeminiLiveProvider:
 
     @property
     def requires_network(self) -> bool:
+        """Always true -- this is a cloud provider."""
         return True
 
     def _require_key(self) -> str:
+        """The API key, or a message naming the variable to set."""
         if not self._api_key:
             raise ProviderError(
                 "GEMINI_API_KEY is not set. It is the same key the text agent "
@@ -117,6 +120,7 @@ class GeminiLiveProvider:
         )
 
     def client(self) -> Any:
+        """The lazily-created Live client."""
         from google import genai
         return genai.Client(api_key=self._require_key())
 

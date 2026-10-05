@@ -30,8 +30,7 @@ api/                     HTTP boundary, lifecycle endpoints, persistence
 sim/session.py           ONE domain loop, shared by every channel
    ├─ sim/exercise.py    facts, timing, owed reports
    ├─ sim/turns.py       one agent turn
-   └─ api/voice.py       transport only
-      api/live_voice.py  transport only
+   └─ api/live_voice.py  Gemini Live transport only
         |
 tools/                   read facts, manage agreements. Nothing writes the world.
         |
@@ -174,8 +173,8 @@ drops reports that went stale rather than delivering a burst.
 
 ## Channels
 
-Text, the ElevenLabs cascade and Gemini Live all drive `sim/session.py`.
-Only audio transport differs.
+Two channels — text and Gemini Live — both drive `sim/session.py`. Only
+transport differs.
 
 The previous version let `api/live_voice.py` reimplement the domain layer.
 It omitted a whole tool, never gave the procedure checker its context, and
@@ -184,17 +183,33 @@ event could fire twice. Tests now assert no channel module contains
 `select_firing` or its own trigger loop, and that the Live tool
 declarations match the real tool set by name.
 
-### A real difference, kept
+### One consumer per report queue
 
-| | ElevenLabs cascade | Gemini Live |
-|---|---|---|
-| Shape | STT → agent → TTS | one model hears and speaks |
-| Extra key | `ELEVENLABS_API_KEY` | none |
-| Pacing | the delivery plan applies | the model's own prosody |
-| Vocabulary hints | yes, from the mission | not supported by the API |
+Revelation and delivery are separate (above), but the owed-report queue
+must still have exactly one consumer, or a report fires twice. Gemini Live
+speaks reports itself inside its own session, so `LiveBridge.run` sets
+`exercise.reports_owner = "gemini_live"` for the socket's lifetime and the
+Session's speak loop stands down. Ownership returns on disconnect, so a
+session that outlives its socket is never left with no consumer.
 
-Gemini Live controls its own pauses, so authored stalls do not apply there.
-That is a genuine difference in feel, not something to claim away.
+A report is **claimed**, not removed: it stays queued and merely becomes
+invisible to a second claim, so a delivery that fails or is abandoned can
+release it and retry while it is still relevant. Sending a cue to the
+model is not delivery — only a completed turn with speech in it counts.
+
+### Gemini Live: known limits
+
+| | Gemini Live |
+|---|---|
+| Shape | one model hears, reasons and speaks |
+| Extra key | none — uses `GEMINI_API_KEY` |
+| Pacing | the model's own prosody |
+| Vocabulary hints | not supported by the API |
+
+Two honest limits. Recognition is not biased toward the mission's terms,
+because the Live API takes no keyterms. And the model transcribes its own
+speech, so when the trainee talks over it what they actually heard can
+only be estimated — those rows carry `delivery="streamed"` to record that.
 
 ---
 

@@ -26,11 +26,13 @@ const FRAME_SAMPLES = 320;
 // fills a fixed buffer and posts it when full.
 const WORKLET_SOURCE = `
 class CaptureProcessor extends AudioWorkletProcessor {
+  // Allocate the fixed frame buffer once; the audio thread cannot allocate freely.
   constructor() {
     super();
     this.buffer = new Int16Array(${FRAME_SAMPLES});
     this.offset = 0;
   }
+  // Called on the audio thread per render quantum: convert to 16-bit and post full frames.
   process(inputs) {
     const channel = inputs[0]?.[0];
     if (!channel) return true;
@@ -51,11 +53,12 @@ registerProcessor('capture', CaptureProcessor);
 `;
 
 export class VoiceClient {
+  // Hold the session details and callbacks; no audio or socket is opened yet.
   constructor({ sessionId, apiBase = "", onEvent = () => {}, endpoint = "voice" }) {
     this.sessionId = sessionId;
     this.apiBase = apiBase;
     this.onEvent = onEvent;
-    // "voice" = cascade (STT -> agent -> TTS), "live" = Gemini native
+    // "live" is the Gemini Live route: native Hebrew
     // speech-to-speech. They differ in output sample rate, which the
     // server announces on connect.
     this.endpoint = endpoint;
@@ -74,6 +77,7 @@ export class VoiceClient {
     this.muted = false;
   }
 
+  // Open the voice WebSocket, start the microphone, and resolve once the server is ready.
   async connect() {
     const scheme = location.protocol === "https:" ? "wss" : "ws";
     const host = this.apiBase ? this.apiBase.replace(/^https?:\/\//, "") : location.host;
@@ -89,7 +93,7 @@ export class VoiceClient {
           this.flushPlayback();
         }
         if (message.type === "voice_ready" && message.output_sample_rate) {
-          // Gemini Live outputs 24kHz while the cascade outputs 16kHz.
+          // Gemini Live outputs 24kHz; input capture is 16kHz.
           // Playing at the wrong rate makes the voice sound chipmunked or
           // slurred, so the rate is taken from the server rather than
           // assumed.
@@ -114,6 +118,7 @@ export class VoiceClient {
     await this.startPlayback();
   }
 
+  // Capture the microphone at 16kHz through the worklet and stream frames to the server.
   async startMic() {
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -151,6 +156,7 @@ export class VoiceClient {
     node.connect(silent).connect(this.micContext.destination);
   }
 
+  // Rebuild the playback context if the server announced a different output rate.
   async rebuildPlayback() {
     if (this.playContext?.sampleRate === this.outputRate) return;
     await this.playContext?.close().catch(() => {});
@@ -158,6 +164,7 @@ export class VoiceClient {
     await this.startPlayback();
   }
 
+  // Create the playback context and reset the scheduling cursor.
   async startPlayback() {
     this.playContext = new AudioContext({ sampleRate: this.outputRate });
     // Autoplay policy: a context created before a user gesture starts
@@ -168,6 +175,7 @@ export class VoiceClient {
     this.playCursor = this.playContext.currentTime;
   }
 
+  // Schedule one PCM chunk to play gap-free after whatever is already queued.
   enqueueAudio(arrayBuffer) {
     // Guard every precondition: Web Audio THROWS on a zero-length or
     // odd-length buffer, and an uncaught throw here kills playback for
@@ -203,6 +211,7 @@ export class VoiceClient {
     source.onended = () => this.scheduled.delete(source);
   }
 
+  // enqueueAudio, but a malformed frame drops instead of ending the session.
   safeEnqueue(arrayBuffer) {
     try {
       this.enqueueAudio(arrayBuffer);
@@ -217,6 +226,7 @@ export class VoiceClient {
     }
   }
 
+  // Discard all queued audio at once -- what makes an interruption immediate.
   flushPlayback() {
     // Stop every scheduled buffer, including ones not yet started. This is
     // what makes interruption real rather than cosmetic.
@@ -227,25 +237,30 @@ export class VoiceClient {
     if (this.playContext) this.playCursor = this.playContext.currentTime;
   }
 
+  // Cut the counterpart off: drop queued audio locally and tell the server.
   interrupt() {
     this.flushPlayback();
     this.send({ type: "interrupt" });
   }
 
+  // Send a typed transmission, for when a term is misheard.
   sendText(text) {
     this.send({ type: "text", text });
   }
 
+  // Send one JSON control message, silently skipped if the socket is closed.
   send(message) {
     if (this.socket?.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify(message));
     }
   }
 
+  // Stop forwarding microphone frames without tearing down the capture graph.
   setMuted(muted) {
     this.muted = muted;
   }
 
+  // Tell the server to stop, then release the microphone, audio contexts and socket.
   async close() {
     this.send({ type: "stop" });
     this.flushPlayback();

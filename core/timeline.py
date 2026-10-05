@@ -86,6 +86,7 @@ class TimelineEvent:
     expires_at: float | None = None        # after this, a report is stale
 
     def is_revealed_at(self, elapsed: float) -> bool:
+        """True once this event's start time has passed."""
         return elapsed >= self.start_time
 
     def is_current_at(self, elapsed: float) -> bool:
@@ -150,12 +151,15 @@ class Timeline:
     """
 
     def __init__(self, events: Iterable[TimelineEvent]) -> None:
+        """Hold the events sorted by start time and index them by id."""
         self._events = tuple(sorted(events, key=lambda e: (e.start_time, e.event_id)))
 
     def __len__(self) -> int:
+        """How many events the timeline holds."""
         return len(self._events)
 
     def __iter__(self):
+        """Iterate every authored event -- author-facing; never use this to build a prompt."""
         return iter(self._events)
 
     @property
@@ -164,6 +168,7 @@ class Timeline:
         return self._events
 
     def event(self, event_id: str) -> TimelineEvent | None:
+        """One event by id, or None."""
         return next((e for e in self._events if e.event_id == event_id), None)
 
     @property

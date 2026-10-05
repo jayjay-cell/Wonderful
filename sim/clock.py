@@ -23,6 +23,7 @@ class VirtualClock:
     """
 
     def __init__(self) -> None:
+        """Start in PREPARING at time zero, like the real clock."""
         self._phase = Phase.PREPARING
         self._now = 0.0
         self._frozen = 0.0
@@ -32,18 +33,22 @@ class VirtualClock:
 
     @property
     def phase(self) -> Phase:
+        """The current lifecycle phase."""
         return self._phase
 
     @property
     def is_running(self) -> bool:
+        """True only in RUNNING."""
         return self._phase is Phase.RUNNING
 
     @property
     def is_ended(self) -> bool:
+        """True once the exercise has stopped for good."""
         return self._phase is Phase.ENDED
 
     @property
     def duration(self) -> float | None:
+        """The authored end time in seconds, or None."""
         return self._duration
 
     def now(self) -> float:
@@ -55,6 +60,7 @@ class VirtualClock:
         return self._now
 
     def is_past_duration(self) -> bool:
+        """True when mission time has reached the authored end."""
         return self._duration is not None and self.now() >= self._duration
 
     def mark_ready(self, duration: float | None = None) -> None:

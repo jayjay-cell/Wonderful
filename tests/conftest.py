@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    """Install the offline guard before any test runs, so a stray network call fails loudly."""
     os.environ.setdefault("MASLUL_OFFLINE", "1")
     from providers import offline
     offline.install()
@@ -56,6 +57,7 @@ def mission_dict() -> dict:
 
 @pytest.fixture
 def mission(mission_dict):
+    """A loaded Mission built from the sample dict."""
     from core.mission import load_mission_dict
     return load_mission_dict(mission_dict)
 
@@ -106,12 +108,14 @@ def timeline_rows() -> list[dict]:
 
 @pytest.fixture
 def timeline(timeline_rows):
+    """A built Timeline from the sample rows."""
     from core.timeline import build_timeline
     return build_timeline(timeline_rows)
 
 
 @pytest.fixture
 def clock():
+    """A VirtualClock, so tests advance mission time without waiting."""
     from sim.clock import VirtualClock
     return VirtualClock()
 

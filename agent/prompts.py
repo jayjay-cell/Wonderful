@@ -65,12 +65,23 @@ def _identity(exercise: Exercise) -> str:
         f"You are the UAV operator on a live intelligence mission. "
         f"Your callsign is {mission.callsigns.operator}.",
     ]
+    if crew.operator_name:
+        lines.append(f"Name: {crew.operator_name}")
     if crew.role:
         lines.append(f"Role: {crew.role}")
     if crew.experience:
         lines.append(f"Experience: {crew.experience}")
     if crew.composition:
         lines.append(f"Crew: {crew.composition}")
+    if crew.squadron:
+        lines.append(f"Squadron: {crew.squadron}")
+    if crew.gender:
+        # Hebrew inflects verbs and adjectives for gender, so leaving this
+        # unstated means the model picks one and may not stay consistent.
+        lines.append(
+            f"You are {crew.gender}; speak with matching grammatical "
+            f"agreement throughout."
+        )
     lines.append(
         f"You are talking to {mission.callsigns.trainee}, the intelligence "
         f"mission manager (kamak), who manages the intelligence side of this "

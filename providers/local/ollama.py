@@ -36,6 +36,7 @@ class OllamaProvider:
 
     def __init__(self) -> None:
         # Blank treated as unset, as with the model name elsewhere.
+        """Read the model name and host from the environment."""
         self._base_url = (
             os.environ.get("OLLAMA_BASE_URL", "").strip() or "http://localhost:11434"
         ).rstrip("/")

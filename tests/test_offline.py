@@ -17,12 +17,14 @@ from providers import offline
 
 
 class TestOfflineGuard:
+    """The offline guard blocks outbound connections but permits localhost."""
     def test_guard_is_active_in_the_test_suite(self) -> None:
         """conftest.py enables it for every test, so 'the core path needs
         no network' is continuously verified rather than assumed (NFR-2)."""
         assert offline.is_active()
 
     def test_outbound_connection_is_blocked(self) -> None:
+        """A connect to a public address raises NetworkAccessBlocked."""
         with pytest.raises(offline.NetworkAccessBlocked) as err:
             socket.create_connection(("example.com", 443), timeout=1)
         assert "example.com" in str(err.value)
@@ -62,6 +64,7 @@ class TestLoggingAllowlist:
     structural instead of a habit."""
 
     def test_allowed_field_is_logged(self, caplog) -> None:
+        """A field on the allowlist reaches the log line."""
         logger = StructuredLogger("test")
         with caplog.at_level(logging.INFO):
             logger.info("turn.completed", session_id="abc123", latency_ms=42)
@@ -77,6 +80,7 @@ class TestLoggingAllowlist:
         ("transcript", "full conversation"),
     ])
     def test_disallowed_fields_are_dropped(self, caplog, field, value) -> None:
+        """Mission content is filtered out of logs entirely."""
         logger = StructuredLogger("test")
         with caplog.at_level(logging.INFO):
             logger.info("event.name", **{field: value})
@@ -106,12 +110,14 @@ class TestLoggingAllowlist:
         assert "traceback" not in ALLOWED_FIELDS
 
     def test_event_name_always_appears(self, caplog) -> None:
+        """The event name is logged even with no fields."""
         logger = StructuredLogger("test")
         with caplog.at_level(logging.INFO):
             logger.info("mission.loaded", mission_id="uav_operator_basic")
         assert "mission.loaded" in caplog.text
 
     def test_none_values_are_omitted(self, caplog) -> None:
+        """A None field is skipped rather than logged as 'None'."""
         logger = StructuredLogger("test")
         with caplog.at_level(logging.INFO):
             logger.info("x", session_id="s1", trigger_id=None)

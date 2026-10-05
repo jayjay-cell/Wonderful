@@ -25,16 +25,30 @@ langchain-core>=1.0
 langgraph>=1.2
 typing_extensions>=4.12
 
+# --- Timeline authoring ---
+openpyxl>=3.1                    # .xlsx timelines (core/timeline_import.py)
+
 # --- API (step 6) ---
 fastapi>=0.115
 uvicorn[standard]>=0.32
 
-# --- Cloud providers: development only, never required at runtime ---
-# Deliberately optional. The air-gapped deployment installs neither, and
-# providers/cloud/* imports them lazily so a missing package is only an
-# error if you actually select that provider. See tests/test_offline.py.
-langchain-anthropic>=1.7 ; extra == "cloud"
-langchain-google-genai>=4.4 ; extra == "cloud"
+# --- Cloud providers ---
+# Required for the current cloud MVP: Gemini for text turns, google-genai
+# for the Live voice session.
+#
+# These were previously marked `; extra == "cloud"`. That is NOT a valid
+# marker in a plain requirements file -- pip evaluates `extra` as empty
+# outside package metadata, so BOTH lines were silently skipped and a
+# clean install produced an app that could not answer at all.
+#
+# providers/cloud/* still imports them lazily, so an air-gapped install
+# that strips this section and selects LLM_PROVIDER=ollama keeps working.
+langchain-google-genai>=4.4      # text turns (Gemini)
+google-genai>=1.0                # Gemini Live speech-to-speech
+websockets>=13.0                 # Live transport
+
+# Optional alternative text provider; select with LLM_PROVIDER=anthropic.
+langchain-anthropic>=1.7
 
 # --- Local providers (step 7) ---
 # Ollama is reached over plain HTTP on localhost, so it needs no SDK.

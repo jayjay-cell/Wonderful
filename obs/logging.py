@@ -66,6 +66,7 @@ class StructuredLogger:
     """
 
     def __init__(self, name: str) -> None:
+        """Wrap the standard logger for this module name."""
         self._logger = logging.getLogger(name)
 
     def _emit(self, level: int, event: str, **fields: Any) -> None:
@@ -76,9 +77,11 @@ class StructuredLogger:
         self._logger.log(level, "%s %s", event, rendered)
 
     def info(self, event: str, **fields: Any) -> None:
+        """Log a normal event."""
         self._emit(logging.INFO, event, **fields)
 
     def warning(self, event: str, **fields: Any) -> None:
+        """Log something recoverable but worth noticing."""
         self._emit(logging.WARNING, event, **fields)
 
     def error(self, event: str, **fields: Any) -> None:
@@ -103,4 +106,5 @@ class StructuredLogger:
 
 
 def get_logger(name: str) -> StructuredLogger:
+    """A logger for one module, filtered through the field allowlist."""
     return StructuredLogger(name)

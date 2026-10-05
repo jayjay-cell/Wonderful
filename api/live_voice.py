@@ -30,6 +30,7 @@ from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+from core.lifecycle import Phase
 from obs.logging import get_logger
 
 logger = get_logger("api.live_voice")
@@ -68,6 +69,7 @@ class LiveBridge:
     """Browser audio <-> Live session <-> the shared domain layer."""
 
     def __init__(self, socket: WebSocket, live: Any, provider: Any) -> None:
+        """Wire the socket, session and Live provider together and start with no Live session open."""
         self.socket = socket
         self.live = live
         self.session = live.session
@@ -78,6 +80,10 @@ class LiveBridge:
         self._stopped = asyncio.Event()
         self._speaking = False
         self._buffer = ""
+        # The report this turn is delivering, resolved on turn_complete.
+        self._awaiting: Any = None
+        # Last lifecycle phase seen, to detect a pause and flush playback.
+        self._last_phase = self.exercise.phase
 
     # -- tools ------------------------------------------------------------
 
@@ -113,6 +119,10 @@ class LiveBridge:
         )
         async with session_cm as live_session:
             self._live_session = live_session
+            # Take over report delivery for as long as this bridge lives,
+            # so the Session's speak loop stands down and one queue has
+            # exactly one consumer.
+            self.exercise.reports_owner = "gemini_live"
             await self._event({
                 "type": "voice_ready", "mode": "gemini_live",
                 "input_sample_rate": 16000, "output_sample_rate": 24000,
@@ -130,6 +140,12 @@ class LiveBridge:
                 for task in tasks:
                     task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
+                # Hand reports back, so a session that keeps running after
+                # the socket drops is not left with no consumer at all.
+                self.exercise.reports_owner = "session"
+                if self._awaiting is not None:
+                    self.exercise.release_report(self._awaiting)
+                    self._awaiting = None
 
     async def _from_browser(self) -> None:
         """Forward microphone audio into the Live session."""
@@ -140,7 +156,12 @@ class LiveBridge:
                     break
 
                 if (pcm := message.get("bytes")) is not None:
-                    if self._live_session is not None and pcm:
+                    # Dropped, not buffered, outside a running exercise:
+                    # audio sent before Start or during a Pause would be
+                    # answered as though the exercise were live, and a
+                    # backlog would burst on resume.
+                    if (pcm and self._live_session is not None
+                            and self._accepting_input()):
                         await self._live_session.send_realtime_input(
                             audio={"data": pcm, "mime_type": "audio/pcm;rate=16000"},
                         )
@@ -154,20 +175,43 @@ class LiveBridge:
         finally:
             self._stopped.set()
 
+    def _accepting_input(self) -> bool:
+        """Whether trainee input may reach the model right now.
+
+        False before Start, while Paused and after End, and during a crew
+        handover -- the same code-enforced availability the text channel
+        uses, so voice cannot talk to a crew that is mid-rotation.
+        """
+        return self.exercise.clock.is_running and self.exercise.crew_available()
+
+    def _record_trainee(self, text: str) -> None:
+        """Persist one trainee transmission and update conversation state.
+
+        Shared by spoken and typed input, so both reach the transcript and
+        the addressing rules identically.
+        """
+        text = text.strip()
+        if not text:
+            return
+        now = self.exercise.clock.now()
+        self.exercise.state.trainee_spoke(now, text)
+        if self.session.store is not None:
+            self.session.store.add_utterance(
+                self.exercise.session_id, speaker="trainee", text=text,
+                mission_seconds=now, origin="reactive", delivery="streamed",
+            )
+
     async def _control(self, message: dict[str, Any]) -> None:
+        """Handle a non-audio message -- a typed transmission, an interruption or a stop."""
         kind = message.get("type")
         if kind == "text" and self._live_session is not None:
             # A typed transmission, for when a term is misheard. Recorded
             # through the shared state so it appears in the transcript
             # exactly as a spoken one would.
+            if not self._accepting_input():
+                return
             text = str(message.get("text", ""))
-            now = self.exercise.clock.now()
-            self.exercise.state.trainee_spoke(now, text)
-            if self.session.store is not None:
-                self.session.store.add_utterance(
-                    self.exercise.session_id, speaker="trainee", text=text,
-                    mission_seconds=now, origin="reactive", delivery="streamed",
-                )
+            self._record_trainee(text)
             await self._live_session.send_client_content(
                 turns={"role": "user", "parts": [{"text": text}]},
                 turn_complete=True,
@@ -223,6 +267,10 @@ class LiveBridge:
             await self._event({"type": "flush_audio"})
             await self._event({"type": "barge_in"})
             self._speaking = False
+            # Persist what was actually said before the cut, and clear the
+            # buffer. Carrying it forward would splice the unsaid
+            # remainder onto the next turn's transcript.
+            self._flush_transcript(status="interrupted")
             return
 
         if content.model_turn:
@@ -238,8 +286,13 @@ class LiveBridge:
                     await self.socket.send_bytes(data)
 
         if content.input_transcription and content.input_transcription.text:
+            # The trainee's own speech. Persisted and pushed into the
+            # shared conversation state, so a voice session has a
+            # transcript to debrief and the addressing and briefing rules
+            # see that contact was made.
             await self._event({"type": "final_transcript",
                                "text": content.input_transcription.text})
+            self._record_trainee(content.input_transcription.text)
 
         if content.output_transcription and content.output_transcription.text:
             await self._event({"type": "counterpart_text",
@@ -251,7 +304,7 @@ class LiveBridge:
             self._flush_transcript()
             await self._event({"type": "turn_complete"})
 
-    def _flush_transcript(self) -> None:
+    def _flush_transcript(self, status: str = "completed") -> None:
         """Persist the operator's turn once complete.
 
         Marked `delivery="streamed"`: the model transcribes its own
@@ -261,15 +314,40 @@ class LiveBridge:
         """
         text = self._buffer.strip()
         self._buffer = ""
+        report, self._awaiting = self._awaiting, None
+
         if not text:
+            # Nothing was said, so an owed report is still owed.
+            if report is not None:
+                self.exercise.release_report(report)
             return
+
         now = self.exercise.clock.now()
         self.exercise.state.operator_spoke(now)
+
+        # A report counts as delivered only here, and only if the turn ran
+        # to completion. Cut off part-way, it is retried instead.
+        delivered = report is not None and status == "completed"
+        if report is not None:
+            if delivered:
+                self.exercise.complete_report(report)
+            else:
+                self.exercise.release_report(report)
+
         if self.session.store is not None:
             self.session.store.add_utterance(
                 self.exercise.session_id, speaker="operator", text=text,
-                mission_seconds=now, origin="reactive", delivery="streamed",
+                mission_seconds=now,
+                origin="report" if report is not None else "reactive",
+                event_id=report.event.event_id if report is not None else None,
+                status=status, delivery="streamed",
             )
+            if report is not None:
+                self.session.store.add_revealed(
+                    self.exercise.session_id, report.event.event_id, now,
+                    reported=delivered,
+                    disposition="delivered" if delivered else "pending",
+                )
 
     # -- reports ----------------------------------------------------------
 
@@ -286,10 +364,23 @@ class LiveBridge:
         try:
             while not self._stopped.is_set():
                 await asyncio.sleep(TICK_SECONDS)
+
+                # On leaving RUNNING, tell the browser to drop whatever it
+                # has buffered: audio generated before a pause must not
+                # keep playing after it, or resume into silence it already
+                # heard.
+                phase = self.exercise.phase
+                if phase is not self._last_phase:
+                    self._last_phase = phase
+                    if phase is not Phase.RUNNING:
+                        self._speaking = False
+                        await self._event({"type": "flush_audio"})
+                        self._flush_transcript(status="abandoned")
+
                 if not self.exercise.clock.is_running or self._speaking:
                     continue
 
-                report = self.exercise.next_report()
+                report = self.exercise.claim_report()
                 if report is None:
                     continue
 
@@ -298,17 +389,21 @@ class LiveBridge:
                     report.event.instructions,
                     report.event.priority,
                 )
-                await live_session.send_client_content(
-                    turns={"role": "user", "parts": [{"text": cue}]},
-                    turn_complete=True,
-                )
-                self.exercise.ledger.mark_reported(report.event.event_id)
-                if self.session.store is not None:
-                    self.session.store.add_revealed(
-                        self.exercise.session_id, report.event.event_id,
-                        self.exercise.clock.now(), reported=True,
-                        disposition="delivered",
+                try:
+                    await live_session.send_client_content(
+                        turns={"role": "user", "parts": [{"text": cue}]},
+                        turn_complete=True,
                     )
+                except Exception:
+                    # The cue never reached the model, so nothing was
+                    # said. Put it back rather than recording a delivery.
+                    self.exercise.release_report(report)
+                    raise
+
+                # Sending a cue is not delivery: the model still has to
+                # speak it. _flush_transcript resolves this report once a
+                # turn actually completes.
+                self._awaiting = report
                 await self._event({"type": "report",
                                    "event_id": report.event.event_id})
         except asyncio.CancelledError:
@@ -318,6 +413,7 @@ class LiveBridge:
                          error_code=type(err).__name__, status="error")
 
     async def _event(self, payload: dict[str, Any]) -> None:
+        """Send one event to the browser, stopping the bridge if the socket is gone."""
         try:
             await self.socket.send_text(json.dumps(payload, ensure_ascii=False))
         except Exception:

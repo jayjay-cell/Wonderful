@@ -42,6 +42,7 @@ class SessionState(TypedDict):
 
 
 def initial_state() -> SessionState:
+    """A fresh session: no messages, no failure, nothing awaiting readback."""
     return SessionState(
         messages=[],
         last_failure=None,
@@ -51,15 +52,18 @@ def initial_state() -> SessionState:
 
 
 def append_trainee_message(state: SessionState, text: str) -> None:
+    """Add a trainee transmission and record that contact has now been made."""
     state["messages"].append({"role": "user", "content": text})
     state["trainee_has_transmitted"] = True
 
 
 def append_counterpart_message(state: SessionState, text: str) -> None:
+    """Add one of Glok's replies to the history."""
     state["messages"].append({"role": "assistant", "content": text})
 
 
 def message_count(state: SessionState) -> int:
+    """How many messages the history holds."""
     return len(state["messages"])
 
 

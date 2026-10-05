@@ -16,7 +16,7 @@
     actions, and green/amber/red reserved for state — so an amber chip
     always means "attention here".
 -->
-<html lang="he" dir="rtl">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -96,12 +96,13 @@ select:hover, input[type=text]:hover { border-color: var(--line-lit); }
 .note b { color: var(--fg); font-weight: 600; }
 
 .brief {
+  direction: rtl; text-align: start;
   margin-top: 20px; padding: 15px 17px; background: var(--surface);
   border-radius: var(--r); border-inline-start: 3px solid var(--warn);
   font-size: 14px; line-height: 1.7; white-space: pre-wrap; color: var(--fg-2);
 }
 .brief::before {
-  content: "תדריך"; display: block; font: 600 10.5px/1 var(--mono);
+  content: "Briefing"; display: block; font: 600 10.5px/1 var(--mono);
   color: var(--warn); letter-spacing: .14em; text-transform: uppercase;
   margin-bottom: 8px;
 }
@@ -167,6 +168,8 @@ select:hover, input[type=text]:hover { border-color: var(--line-lit); }
 .turn .said {
   padding: 11px 14px; border-radius: var(--r);
   white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65;
+  /* The interface is English; the net is Hebrew. */
+  direction: rtl; text-align: start;
 }
 .from-trainee { align-self: flex-start; }
 .from-trainee .said { background: var(--trainee);
@@ -175,7 +178,7 @@ select:hover, input[type=text]:hover { border-color: var(--line-lit); }
 .from-op .said { background: var(--operator);
                  border-inline-end: 3px solid var(--ok); }
 .from-op.volunteered .said { border-inline-end-color: var(--warn); }
-.from-op.volunteered .label::after { content: " · יזום"; color: var(--warn); }
+.from-op.volunteered .label::after { content: " · unprompted"; color: var(--warn); }
 .from-op.cut { opacity: .6; }
 .live { opacity: .55; font-style: italic; }
 .garbled { opacity: .5; letter-spacing: .05em; font-style: italic; }
@@ -250,7 +253,8 @@ select:hover, input[type=text]:hover { border-color: var(--line-lit); }
 .read dd { margin: 0; font: 500 13.5px/1 var(--mono);
            font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-.obs { font-size: 13px; line-height: 1.6; color: var(--fg-2);
+.obs { direction: rtl; text-align: start;
+       font-size: 13px; line-height: 1.6; color: var(--fg-2);
        padding: 6px 0 6px 10px; border-inline-start: 2px solid var(--line); }
 .obs.now { border-inline-start-color: var(--ok); color: var(--fg); }
 .obs.was { color: var(--fg-3); }
@@ -270,30 +274,29 @@ select:hover, input[type=text]:hover { border-color: var(--line-lit); }
 <section id="setup">
   <div class="card">
     <div class="logo"><span></span><h1>Maslul</h1></div>
-    <p class="lede">מאמן שיחה לסרטון משימה מוקלט</p>
+    <p class="lede">Conversation trainer for a prerecorded mission video</p>
 
     <div class="field">
-      <label for="mission">תרגיל</label>
+      <label for="mission">Exercise</label>
       <select id="mission"></select>
     </div>
 
     <div class="field">
-      <label for="mode">ערוץ</label>
+      <label for="mode">Channel</label>
       <select id="mode">
-        <option value="live" selected>קולי — Gemini Live</option>
-        <option value="voice">קולי — ElevenLabs</option>
-        <option value="text">טקסט</option>
+        <option value="gemini_live" selected>Voice — Gemini Live</option>
+        <option value="text">Text</option>
       </select>
     </div>
 
     <p class="note">
-      הסרטון מתנגן ב<b>נגן נפרד</b>. ההכנה לא מפעילה את השעון —
-      לחץ "התחל תרגיל" והפעל את הסרטון באותו רגע.
+      The video plays in a <b>separate player</b>. Preparing does not start
+      the clock — press Start Exercise and start the video at the same moment.
     </p>
 
     <div id="brief" class="brief" hidden></div>
     <div id="error" class="error" hidden></div>
-    <button id="prepare" class="primary">הכן תרגיל</button>
+    <button id="prepare" class="primary">Prepare Exercise</button>
   </div>
 </section>
 
@@ -302,9 +305,9 @@ select:hover, input[type=text]:hover { border-color: var(--line-lit); }
     <span class="name" id="name"></span>
     <span class="who" id="who"></span>
     <span class="gap"></span>
-    <span class="tag" id="phase"><i></i><span>הכנה</span></span>
+    <span class="tag" id="phase"><i></i><span>Preparing</span></span>
     <span class="clock" id="clock">00:00<small> / --:--</small></span>
-    <span class="tag" id="link"><i></i><span>טקסט</span></span>
+    <span class="tag" id="link"><i></i><span>Text</span></span>
   </header>
 
   <div class="body">
@@ -315,28 +318,28 @@ select:hover, input[type=text]:hover { border-color: var(--line-lit); }
 
       <!-- Before the exercise runs: ONE action, with its context. -->
       <div class="gate" id="gate">
-        <p>מוכן. לחץ והפעל את הסרטון באותו רגע.</p>
-        <button type="button" class="btn go" id="begin">התחל תרגיל</button>
+        <p>Ready. Press this and start the video at the same moment.</p>
+        <button type="button" class="btn go" id="begin">Start Exercise</button>
       </div>
 
       <!-- While running: transmit, then secondary controls. -->
       <form class="composer" id="composer" hidden>
-        <input id="text" type="text" placeholder="תשדורת…" autocomplete="off">
-        <button type="submit" class="btn go">שלח</button>
+        <input id="text" type="text" placeholder="Transmit…" autocomplete="off">
+        <button type="submit" class="btn go">Send</button>
         <span class="sep"></span>
-        <button type="button" class="btn" id="mic" hidden>מיקרופון</button>
-        <button type="button" class="btn" id="hold">השהה</button>
-        <button type="button" class="btn quiet" id="stop">סיים</button>
+        <button type="button" class="btn" id="mic" hidden>Mic</button>
+        <button type="button" class="btn" id="hold">Pause</button>
+        <button type="button" class="btn quiet" id="stop">End</button>
       </form>
     </div>
 
     <aside id="rail">
-      <h2>מה הצוות רואה</h2>
+      <h2>What the crew sees</h2>
       <dl id="facts" style="margin:0"><span class="empty">—</span></dl>
-      <h2>תצפיות</h2>
-      <div id="obs"><span class="empty">אין</span></div>
-      <h2>התחייבויות</h2>
-      <div id="commit"><span class="empty">אין</span></div>
+      <h2>Observations</h2>
+      <div id="obs"><span class="empty">None</span></div>
+      <h2>Commitments</h2>
+      <div id="commit"><span class="empty">None</span></div>
     </aside>
   </div>
 </section>
@@ -355,17 +358,18 @@ let missions = [];
 try {
   missions = (await (await fetch(`${API}/missions`)).json()).missions;
 } catch {
-  showError("השרת לא זמין. הפעל: python run.py");
+  showError("Server unavailable. Start it with: python run.py");
 }
 
 for (const m of missions) {
   const option = document.createElement("option");
   option.value = m.file;
-  option.textContent = m.error ? `${m.file} — שגיאה` : m.title;
+  option.textContent = m.error ? `${m.file} — failed to load` : m.title;
   option.disabled = Boolean(m.error);
   $("mission").append(option);
 }
 
+// Show the chosen exercise's trainee briefing, if it has one.
 const showBrief = () => {
   const m = missions.find((x) => x.file === $("mission").value);
   $("brief").hidden = !m?.trainee_briefing;
@@ -374,9 +378,25 @@ const showBrief = () => {
 $("mission").onchange = showBrief;
 showBrief();
 
+// Surface a setup failure in the card rather than only in the console.
 function showError(message) {
   $("error").hidden = false;
   $("error").textContent = message;
+}
+
+// Turn any failed response into one readable line. FastAPI returns a LIST
+// of field errors for a 422, which stringifies to "[object Object]" if
+// handed straight to the user.
+async function describe(res) {
+  let detail;
+  try { detail = (await res.json()).detail; } catch { /* not JSON */ }
+  if (Array.isArray(detail)) {
+    return detail
+      .map((d) => `${(d.loc ?? []).slice(1).join(".")}: ${d.msg}`)
+      .join("; ");
+  }
+  if (typeof detail === "string") return detail;
+  return `${res.status} ${res.statusText}`;
 }
 
 // ---------- prepare (does NOT start the clock) ----------
@@ -401,7 +421,7 @@ $("prepare").onclick = async () => {
         channel: $("mode").value,
       }),
     });
-    if (!res.ok) throw new Error((await res.json()).detail ?? "failed");
+    if (!res.ok) throw new Error(await describe(res));
     session = await res.json();
     openConsole();
   } catch (err) {
@@ -410,6 +430,7 @@ $("prepare").onclick = async () => {
   }
 };
 
+// Swap setup for the console, open the event stream, and start polling.
 function openConsole() {
   $("setup").hidden = true;
   $("console").classList.add("on");
@@ -425,19 +446,21 @@ function openConsole() {
   stream.onmessage = (event) => onServer(JSON.parse(event.data));
 
   const mode = $("mode").value;
-  if (mode === "text") setTag("link", "", "טקסט");
-  else connectVoice(mode);
+  if (mode === "text") setTag("link", "", "Text");
+  else connectVoice();
 
   setInterval(poll, 1500);
   poll();
 }
 
+// Seconds as MM:SS, for the clock and timeline times.
 const stamp = (seconds) => {
   const whole = Math.floor(seconds);
   return `${String(Math.floor(whole / 60)).padStart(2, "0")}:` +
          `${String(whole % 60).padStart(2, "0")}`;
 };
 
+// Set one status chip's colour and label. kind is "", ok, warn or bad.
 function setTag(id, kind, label) {
   const el = $(id);
   el.className = `tag ${kind}`;
@@ -453,17 +476,17 @@ $("begin").onclick = async () => {
   $("gate").hidden = true;
   $("composer").hidden = false;
   $("text").focus();
-  system("התרגיל התחיל — הפעל את הסרטון עכשיו");
+  system("Exercise started — start the video now");
 };
 
 $("hold").onclick = async () => {
   const paused = $("hold").dataset.on === "1";
   await post(`/sessions/${session.session_id}/${paused ? "resume" : "pause"}`);
   $("hold").dataset.on = paused ? "" : "1";
-  $("hold").textContent = paused ? "השהה" : "המשך";
+  $("hold").textContent = paused ? "Pause" : "Resume";
   $("hold").classList.toggle("on", !paused);
   // No control of the external player; the trainer pauses it separately.
-  system(paused ? "התרגיל ממשיך" : "התרגיל מושהה — השהה גם את הסרטון");
+  system(paused ? "Exercise resumed" : "Exercise paused — pause the video too");
 };
 
 $("stop").onclick = async () => {
@@ -474,28 +497,32 @@ $("stop").onclick = async () => {
 };
 
 // ---------- voice ----------
-async function connectVoice(mode) {
+async function connectVoice() {
   $("mic").hidden = false;
-  setTag("link", "warn", "מתחבר");
+  setTag("link", "warn", "Connecting");
   voice = new VoiceClient({
+    // "live" is the WebSocket route name, not the channel value the
+    // /sessions request takes -- conflating the two is what made voice
+    // mode fail validation with a 422.
     sessionId: session.session_id, apiBase: API,
-    endpoint: mode, onEvent: onVoice,
+    endpoint: "live", onEvent: onVoice,
   });
   try {
     await voice.connect();
-    setTag("link", "ok", "מקשיב");
-    $("text").placeholder = "דבר, או הקלד אם לא זוהה…";
+    setTag("link", "ok", "Listening");
+    $("text").placeholder = "Speak, or type if misheard…";
   } catch (err) {
     voice = null;
-    setTag("link", "bad", "ללא קול");
-    system(`קול לא זמין: ${err.message} — ממשיכים בטקסט`);
+    setTag("link", "bad", "No voice");
+    system(`Voice unavailable: ${err.message} — continuing in text`);
   }
 }
 
+// Render one event from the voice bridge: transcripts, speech, barge-in, errors.
 function onVoice(ev) {
   switch (ev.type) {
     case "voice_ready":
-      setTag("link", "ok", "מקשיב");
+      setTag("link", "ok", "Listening");
       break;
 
     case "partial_transcript":
@@ -531,8 +558,8 @@ function onVoice(ev) {
       break;
 
     case "barge_in":
-      setTag("link", "warn", "קוטע");
-      setTimeout(() => setTag("link", "ok", "מקשיב"), 900);
+      setTag("link", "warn", "Interrupting");
+      setTimeout(() => setTag("link", "ok", "Listening"), 900);
       break;
 
     case "turn_complete":
@@ -541,15 +568,22 @@ function onVoice(ev) {
       break;
 
     case "error":
-      system(ev.message || "שגיאה בקול");
+      system(ev.message || "Voice error");
       break;
 
     case "audio_error":
-      system(`בעיה בהשמעה: ${ev.message}`);
+      system(`Playback problem: ${ev.message}`);
       break;
 
     case "voice_closed":
-      setTag("link", "bad", "התנתק");
+      // Drop the client so the composer falls back to the HTTP text path.
+      // Keeping it would send every later message into a dead socket,
+      // which looks exactly like the counterpart going silent.
+      voice = null;
+      setTag("link", "bad", "Disconnected");
+      $("mic").hidden = true;
+      $("text").placeholder = "Transmit…";
+      system("Voice disconnected — typed messages still work");
       break;
   }
 }
@@ -568,13 +602,14 @@ function onServer(ev) {
       addTurn(who, ev.text, { volunteered });
       break;
     }
-    case "started": system("התרגיל התחיל"); break;
-    case "paused":  system("מושהה"); break;
-    case "resumed": system("ממשיך"); break;
-    case "ended":   system("התרגיל הסתיים"); break;
+    case "started": system("Exercise started"); break;
+    case "paused":  system("Paused"); break;
+    case "resumed": system("Resumed"); break;
+    case "ended":   system("Exercise ended"); break;
   }
 }
 
+// Append one transmission to the log and return its node, so voice can stream into it.
 function addTurn(who, text, info) {
   const wrap = document.createElement("div");
   wrap.className = `turn ${who === "trainee" ? "from-trainee" : "from-op"}`;
@@ -596,6 +631,7 @@ function addTurn(who, text, info) {
   return wrap;
 }
 
+// Add a centred system line -- lifecycle changes and failures, not speech.
 function system(text) {
   const el = document.createElement("div");
   el.className = "sysline";
@@ -604,6 +640,7 @@ function system(text) {
   scroll();
 }
 
+// Toggle the composing indicator, with a timeout so a missed end event cannot hang it.
 function showTyping(on) {
   clearTimeout(typingTimer);
   const el = $("typing");
@@ -615,6 +652,7 @@ function showTyping(on) {
   typingTimer = setTimeout(() => el.classList.remove("on"), 30000);
 }
 
+// Pin the log to the newest transmission.
 const scroll = () => { $("log").scrollTop = $("log").scrollHeight; };
 
 // ---------- transmit ----------
@@ -639,29 +677,38 @@ $("mic").onclick = () => {
   const muting = !voice.muted;
   voice.setMuted(muting);
   $("mic").classList.toggle("on", muting);
-  $("mic").textContent = muting ? "מושתק" : "מיקרופון";
-  setTag("link", muting ? "warn" : "ok", muting ? "מושתק" : "מקשיב");
+  $("mic").textContent = muting ? "Muted" : "Mic";
+  setTag("link", muting ? "warn" : "ok", muting ? "Muted" : "Listening");
 };
 
+// POST JSON and swallow transport errors -- the poll recovers the real state.
 async function post(path, body) {
   try {
     const res = await fetch(API + path, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body ?? {}),
     });
-    return res.ok ? await res.json() : null;
-  } catch { return null; }
+    if (res.ok) return await res.json();
+    // Shown, not swallowed: a silently failed send is indistinguishable
+    // from the counterpart choosing not to answer.
+    system(`Request failed — ${await describe(res)}`);
+    return null;
+  } catch (err) {
+    system(`Server unreachable — ${err.message}`);
+    return null;
+  }
 }
 
 // ---------- trainer rail ----------
 // Shows what the CREW can see, plus what it has agreed to report. Judging
 // whether an answer was honest means knowing what the crew had.
 const PHASE = {
-  preparing: ["", "הכנה"], ready: ["warn", "מוכן"],
-  running: ["ok", "פעיל"], paused: ["warn", "מושהה"],
-  ended: ["bad", "הסתיים"],
+  preparing: ["", "Preparing"], ready: ["warn", "Ready"],
+  running: ["ok", "Running"], paused: ["warn", "Paused"],
+  ended: ["bad", "Ended"],
 };
 
+// Refresh the clock, phase and trainer rail from the server's authoritative state.
 async function poll() {
   if (!session) return;
   try {
@@ -697,7 +744,7 @@ async function poll() {
     const obs = $("obs");
     obs.textContent = "";
     const all = state.observations ?? [];
-    if (!all.length) obs.append(empty("אין"));
+    if (!all.length) obs.append(empty("None"));
     for (const o of [...all].sort((a, b) => b.is_current - a.is_current)) {
       const el = document.createElement("div");
       el.className = `obs ${o.is_current ? "now" : "was"}`;
@@ -707,7 +754,7 @@ async function poll() {
     if (state.handover_active) {
       const el = document.createElement("div");
       el.className = "obs was";
-      el.textContent = "החלפת צוותים — שיחה רגילה לא זמינה";
+      el.textContent = "Crew handover — ordinary conversation unavailable";
       obs.append(el);
     }
 
@@ -715,7 +762,7 @@ async function poll() {
     box.textContent = "";
     const commitments = state.commitments ?? [];
     const owed = state.reports_owed ?? [];
-    if (!commitments.length && !owed.length) box.append(empty("אין"));
+    if (!commitments.length && !owed.length) box.append(empty("None"));
     for (const c of commitments) {
       const el = document.createElement("span");
       el.className = "pill";
@@ -725,12 +772,13 @@ async function poll() {
     for (const id of owed) {
       const el = document.createElement("span");
       el.className = "pill due";
-      el.textContent = `ממתין לדיווח · ${id}`;
+      el.textContent = `Report owed · ${id}`;
       box.append(el);
     }
   } catch { /* the rail is advisory; a failed poll must not interrupt */ }
 }
 
+// A placeholder for an empty rail section.
 function empty(text) {
   const el = document.createElement("span");
   el.className = "empty";

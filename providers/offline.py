@@ -42,6 +42,7 @@ class NetworkAccessBlocked(RuntimeError):
     """
 
     def __init__(self, host: Any, port: Any) -> None:
+        """Build the message naming the blocked host and both remedies."""
         super().__init__(
             f"offline mode blocked an outbound connection to {host}:{port}. "
             f"This deployment target has no internet access. Either select a "
@@ -79,12 +80,14 @@ def install() -> bool:
         return False
 
     def guarded_connect(self: socket.socket, address: Any) -> Any:
+        """Refuse any socket connect to a non-local address."""
         if not _is_local(address):
             host, port = (address[0], address[1]) if isinstance(address, (tuple, list)) else (address, "?")
             raise NetworkAccessBlocked(host, port)
         return _original_socket_connect(self, address)
 
     def guarded_create_connection(address: Any, *args: Any, **kwargs: Any) -> Any:
+        """Refuse any new connection to a non-local address."""
         if not _is_local(address):
             host, port = (address[0], address[1]) if isinstance(address, (tuple, list)) else (address, "?")
             raise NetworkAccessBlocked(host, port)
@@ -106,4 +109,5 @@ def uninstall() -> None:
 
 
 def is_active() -> bool:
+    """Whether the offline guard is currently installed."""
     return _installed

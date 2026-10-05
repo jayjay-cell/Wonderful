@@ -123,6 +123,7 @@ def strip_system_messages(messages: list[Any]) -> list[Any]:
     the first is simply not prepending it.
     """
     def is_system(message: Any) -> bool:
+        """Whether a message is a system message, in either dict or object form."""
         if isinstance(message, dict):
             return message.get("role") == "system"
         return getattr(message, "type", None) == "system"

@@ -34,6 +34,7 @@ class AnthropicProvider:
     name = "anthropic"
 
     def __init__(self) -> None:
+        """Read the model name and API key from the environment."""
         self._api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
         # Blank is treated as unset: `ANTHROPIC_MODEL=` in .env would
         # otherwise override the default with "" and fail inside the SDK.
@@ -41,6 +42,7 @@ class AnthropicProvider:
 
     @property
     def requires_network(self) -> bool:
+        """Always true -- this is a cloud provider."""
         return True
 
     def chat_model(self):

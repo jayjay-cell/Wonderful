@@ -57,6 +57,7 @@ class GeminiProvider:
         # and much documentation use that name; silently ignoring a key the
         # user has already set under the other name would be a confusing
         # failure.
+        """Read the model name, key and reasoning effort from the environment."""
         self._api_key = (
             os.environ.get("GEMINI_API_KEY", "").strip()
             or os.environ.get("GOOGLE_API_KEY", "").strip()
@@ -78,6 +79,7 @@ class GeminiProvider:
 
     @property
     def requires_network(self) -> bool:
+        """Always true -- this is a cloud provider."""
         return True
 
     def chat_model(self):

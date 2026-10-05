@@ -61,6 +61,7 @@ def _imported_modules(path: Path) -> set[str]:
 
 
 def _python_files(directory: str) -> list[Path]:
+    """Every .py file under a package, for scanning imports."""
     root = PROJECT_ROOT / directory
     if not root.exists():
         return []
@@ -103,6 +104,7 @@ class TestCoreIsPure:
     """
 
     def test_core_imports_no_framework_or_network(self) -> None:
+        """core/ must stay pure: no FastAPI, no HTTP client, no provider SDK."""
         violations: list[str] = []
         for path in _python_files("core"):
             for module in _imported_modules(path) & FORBIDDEN_IN_CORE:
@@ -132,6 +134,7 @@ class TestNoCloudSdkOutsideCloudProviders:
     """
 
     def test_cloud_sdks_confined(self) -> None:
+        """Cloud SDKs may only be imported inside providers/cloud/."""
         violations: list[str] = []
         for directory in ("core", "agent", "tools", "delivery", "sim", "api", "obs"):
             for path in _python_files(directory):

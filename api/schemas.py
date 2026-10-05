@@ -21,13 +21,9 @@ class StartSessionRequest(BaseModel):
 
     mission_file: str = Field(description="file name inside missions/")
 
-    # Which transport will carry audio. Domain behaviour is identical
-    # across all three; only delivery differs.
-    channel: str = Field(default="text", pattern="^(text|elevenlabs|gemini_live)$")
-
-    # Fixing the seed replays delivery timing, which is what makes "run
-    # that again and watch what you missed" possible.
-    seed: int | None = None
+    # Which transport carries the conversation. Domain behaviour is
+    # identical across both; only delivery differs.
+    channel: str = Field(default="text", pattern="^(text|gemini_live)$")
 
 
 class SessionCreated(BaseModel):
@@ -59,3 +55,7 @@ class SharedContextRequest(BaseModel):
     """
 
     fact: str = Field(min_length=1, max_length=2000)
+
+    # True when this IS the opening briefing, which marks the crew as
+    # briefed so a proactive crew stops asking for it.
+    briefing: bool = False

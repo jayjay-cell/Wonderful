@@ -91,14 +91,17 @@ class LiveSession:
     """
 
     def __init__(self, session: Session | None, mission: Any) -> None:
+        """Hold the session and mission, and open the queue that carries utterances to whichever stream is listening."""
         self.session = session
         self.mission = mission
         self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
 
     async def emit(self, payload: dict[str, Any]) -> None:
+        """Queue one event for the open stream."""
         await self.queue.put(payload)
 
     def on_utterance(self, utterance: Utterance) -> Any:
+        """Turn a recorded utterance into a queued stream event."""
         return self.emit({
             "type": "utterance",
             "speaker": utterance.speaker,
@@ -131,6 +134,7 @@ async def unhandled(request: Request, exc: Exception) -> JSONResponse:
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
+    """Liveness check, with the number of sessions currently held in memory."""
     return {"status": "ok", "sessions": len(_sessions)}
 
 
@@ -296,7 +300,7 @@ async def share_context(session_id: str,
                         request: SharedContextRequest) -> dict[str, Any]:
     """Record context the trainee passed to the crew."""
     live = _live(session_id)
-    live.session.note_shared(request.fact)
+    live.session.note_shared(request.fact, briefing=request.briefing)
     return {"ok": True}
 
 
@@ -310,6 +314,7 @@ async def stream(session_id: str) -> StreamingResponse:
     live = _live(session_id)
 
     async def source():
+        """Yield SSE frames from the session's queue, with a periodic keepalive."""
         try:
             yield _sse({"type": "connected", "session_id": session_id,
                         "phase": live.session.phase.value})
@@ -371,6 +376,7 @@ async def session_state(session_id: str) -> dict[str, Any]:
 
 @app.get("/sessions")
 async def list_sessions() -> dict[str, Any]:
+    """Every past session, newest first, for picking one to review."""
     return {"sessions": [vars(s) for s in store.list_sessions()]}
 
 
@@ -395,32 +401,12 @@ async def review(session_id: str) -> dict[str, Any]:
 # -- voice -----------------------------------------------------------------
 
 
-@app.websocket("/sessions/{session_id}/voice")
-async def voice_socket(socket: WebSocket, session_id: str) -> None:
-    """ElevenLabs cascade: STT -> shared domain layer -> TTS."""
-    await socket.accept()
-    live = _sessions.get(session_id)
-    if live is None:
-        await socket.send_text(json.dumps({"type": "error",
-                                           "message": "no such session"}))
-        await socket.close()
-        return
-
-    from api.voice import run_cascade
-    try:
-        await run_cascade(socket, live)
-    except Exception as err:
-        logger.exception("voice.failed", session_id=session_id,
-                         error_code=type(err).__name__, status="error")
-
-
 @app.websocket("/sessions/{session_id}/live")
 async def live_voice_socket(socket: WebSocket, session_id: str) -> None:
     """Gemini Live: native Hebrew speech-to-speech.
 
-    Shares the domain layer with every other channel; only audio
-    transport differs. Its prosody and pacing genuinely differ from the
-    cascade's -- that is a real difference, not one to claim away.
+    Shares the domain layer with the text channel; only transport
+    differs.
     """
     await socket.accept()
     live = _sessions.get(session_id)
@@ -439,4 +425,5 @@ async def live_voice_socket(socket: WebSocket, session_id: str) -> None:
 
 
 def _sse(payload: dict[str, Any]) -> str:
+    """Frame a payload as one SSE message, keeping Hebrew unescaped."""
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"

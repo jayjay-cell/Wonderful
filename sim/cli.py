@@ -42,6 +42,7 @@ def _force_utf8() -> None:
 
 
 def _stamp(seconds: float) -> str:
+    """Seconds as MM:SS, for printing timeline times."""
     return f"{int(seconds) // 60:02d}:{int(seconds) % 60:02d}"
 
 

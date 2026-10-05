@@ -122,11 +122,7 @@ reestablish_silence: 20
 # HANDOVER — timing is authored in the TIMELINE, not here
 # -----------------------------------------------------------------------------
 handover:
-  announcement: "אנחנו בהחלפת צוותים, שתי דקות אנחנו איתך."
   busy_reply: "אנחנו בהחלפת צוותים, חוזר אליך בקרוב."
-  inherit_facts: true
-  inherit_commitments: true
-  expects_rebrief: false
   allow_urgent: true
 
 # -----------------------------------------------------------------------------
@@ -151,16 +147,6 @@ reporting:
     SYNTHETIC. מדווח יזום על שינוי משמעותי בתמונה.
     שאר המידע — לפי דרישה או לפי הסכמה בשיחה.
   allow_urgent_interruption: true
-
-# -----------------------------------------------------------------------------
-# DELIVERY TUNING — optional
-# -----------------------------------------------------------------------------
-realism:
-  response_delay_ms: [500, 1800]
-  stall_probability: 0.12
-  filler_probability: 0.1
-  filler_sounds: ["אה", "רגע"]
-  seed: null                     # set an integer to replay timing exactly
 
 # -----------------------------------------------------------------------------
 # PRIVATE — author and debrief only. NEVER reaches the operator.

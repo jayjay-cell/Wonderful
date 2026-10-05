@@ -37,6 +37,7 @@ class TimelineError(Exception):
 
     def __init__(self, message: str, row: int | None = None,
                  source: str | Path | None = None) -> None:
+        """Carry the sheet row number, so an import error points at the row to fix."""
         where = f" (row {row})" if row else ""
         origin = f" in {Path(source).name}" if source else ""
         super().__init__(f"timeline{origin}{where}: {message}")
@@ -145,6 +146,7 @@ def _is_not_data(header: list[str], raw: Any) -> bool:
 
 
 def _norm_header(cell: Any) -> str:
+    """Lowercase and strip a header cell so column names tolerate stray spacing and case."""
     return re.sub(r"[\s-]+", "_", str(cell or "").strip().lower())
 
 
@@ -244,6 +246,7 @@ def _check_cross_row(events: list[TimelineEvent], path: Path) -> None:
 
 
 def _text(cell: Any) -> str:
+    """A cell as clean text, with None and numeric cells handled."""
     if cell is None:
         return ""
     return str(cell).strip()

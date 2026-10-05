@@ -57,6 +57,7 @@ class Commitment:
 
     @property
     def is_active(self) -> bool:
+        """True while this agreement still obliges reports."""
         return self.status is CommitmentStatus.ACTIVE
 
     def covers(self, event: TimelineEvent) -> bool:
@@ -119,6 +120,7 @@ class CommitmentLedger:
         return commitment, covered
 
     def cancel(self, commitment_id: str) -> bool:
+        """Drop one agreement by id; False if it was unknown or already inactive."""
         for commitment in self.commitments:
             if commitment.commitment_id == commitment_id and commitment.is_active:
                 commitment.status = CommitmentStatus.CANCELLED
@@ -135,6 +137,7 @@ class CommitmentLedger:
         return count
 
     def supersede(self, commitment_id: str) -> bool:
+        """Retire one agreement because a narrower or newer one replaced it."""
         for commitment in self.commitments:
             if commitment.commitment_id == commitment_id and commitment.is_active:
                 commitment.status = CommitmentStatus.SUPERSEDED
@@ -143,6 +146,7 @@ class CommitmentLedger:
 
     @property
     def active(self) -> tuple[Commitment, ...]:
+        """Every agreement still in force, for the prompt and the trainer's rail."""
         return tuple(c for c in self.commitments if c.is_active)
 
     # -- matching ---------------------------------------------------------

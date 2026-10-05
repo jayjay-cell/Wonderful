@@ -33,6 +33,7 @@ class ScriptedModel(BaseChatModel):
 
     @property
     def _llm_type(self) -> str:
+        """LangChain's model-type tag."""
         return "scripted"
 
     def _generate(
@@ -42,6 +43,7 @@ class ScriptedModel(BaseChatModel):
         run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> ChatResult:
+        """Return the next scripted reply, repeating the last once the script runs out."""
         index = min(self.call_count, len(self.replies) - 1) if self.replies else 0
         self.call_count += 1
         reply = self.replies[index] if self.replies else ""
@@ -78,6 +80,7 @@ class NeverStopsCallingToolsModel(BaseChatModel):
 
     @property
     def _llm_type(self) -> str:
+        """LangChain's model-type tag."""
         return "never_stops"
 
     def _generate(
@@ -87,6 +90,7 @@ class NeverStopsCallingToolsModel(BaseChatModel):
         run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> ChatResult:
+        """Always return another tool call, never a final answer."""
         self.call_count += 1
         message = AIMessage(content="", tool_calls=[{
             "name": self.tool_name,
@@ -96,6 +100,7 @@ class NeverStopsCallingToolsModel(BaseChatModel):
         return ChatResult(generations=[ChatGeneration(message=message)])
 
     def bind_tools(self, tools: Sequence[Any], **kwargs: Any) -> "NeverStopsCallingToolsModel":
+        """Ignore the tools and return self -- this model never varies its reply."""
         return self
 
 
@@ -111,14 +116,17 @@ class FailingModel(BaseChatModel):
 
     @property
     def _llm_type(self) -> str:
+        """LangChain's model-type tag."""
         return "failing"
 
     def _generate(self, messages: list[BaseMessage], stop: list[str] | None = None,
                   run_manager: CallbackManagerForLLMRun | None = None,
                   **kwargs: Any) -> ChatResult:
+        """Always raise, standing in for a provider outage."""
         raise self.error
 
     def bind_tools(self, tools: Sequence[Any], **kwargs: Any) -> "FailingModel":
+        """Ignore the tools and return self."""
         return self
 
 
@@ -132,14 +140,17 @@ class EmptyReplyModel(BaseChatModel):
 
     @property
     def _llm_type(self) -> str:
+        """LangChain's model-type tag."""
         return "empty"
 
     def _generate(self, messages: list[BaseMessage], stop: list[str] | None = None,
                   run_manager: CallbackManagerForLLMRun | None = None,
                   **kwargs: Any) -> ChatResult:
+        """Return whitespace, standing in for a model that says nothing."""
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content="   "))])
 
     def bind_tools(self, tools: Sequence[Any], **kwargs: Any) -> "EmptyReplyModel":
+        """Ignore the tools and return self."""
         return self
 
 

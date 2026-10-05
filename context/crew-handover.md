@@ -33,14 +33,17 @@ Nothing routine does.
 
 ## What the incoming crew inherits
 
-Configurable per exercise. Defaults:
+Everything. One exercise keeps one timeline and one agreement ledger, so
+established facts and active reporting agreements carry straight across a
+rotation, and no fresh briefing is required.
 
-| Setting | Default | Meaning |
-|---|---|---|
-| `inherit_facts` | true | established mission facts carry over |
-| `inherit_commitments` | true | active reporting agreements are honoured |
-| `expects_rebrief` | false | no fresh briefing is required |
+This is not configurable. Settings for selective inheritance
+(`inherit_facts`, `inherit_commitments`, `expects_rebrief`) were
+previously documented here and declared in the mission schema, but the
+engine never read them: there is no separate incoming-crew memory to
+withhold anything from. They have been removed rather than left to look
+like they work.
 
-Set `inherit_facts: false` for an exercise about the cost of a cold
-handover — the incoming crew then starts from the authored prior briefing
-alone.
+Modelling a cold handover — where the incoming crew genuinely does not
+know what was established — would need a second conversation state, and
+is not part of the current MVP.

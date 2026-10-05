@@ -2,7 +2,7 @@
 
 Sits between Exercise (which owns facts and timing) and the channels
 (which own audio). Every channel drives this, so domain behaviour cannot
-diverge between text, the ElevenLabs cascade and Gemini Live -- the
+diverge between text and Gemini Live -- the
 previous version had the Live path reimplementing turns, and it silently
 lost two procedure rules and a whole tool.
 
@@ -49,6 +49,7 @@ class TurnResult:
     abandoned: bool = False                 # paused or ended mid-flight
 
     def __post_init__(self) -> None:
+        """Give each result its own tools list, since a mutable default would be shared."""
         if self.tools_used is None:
             self.tools_used = []
 
@@ -57,6 +58,7 @@ class TurnRunner:
     """Runs agent turns for one exercise."""
 
     def __init__(self, exercise: Exercise, model: Any, for_speech: bool = False) -> None:
+        """Hold the exercise and model, and start with empty conversation history."""
         self.exercise = exercise
         self.for_speech = for_speech
         self._model = model
@@ -159,6 +161,7 @@ class TurnRunner:
         )
 
     def _tools(self) -> list[Any]:
+        """Build the mission tools for this exercise. Imported late to keep the import graph acyclic."""
         from tools.mission_tools import build_mission_tools
         return build_mission_tools(self.exercise)
 

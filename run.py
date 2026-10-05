@@ -27,6 +27,7 @@ PORT = 8000
 
 
 def _port_in_use(port: int) -> bool:
+    """Whether something is already listening -- so a restart fails loudly instead of silently serving stale code."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.settimeout(0.4)
         return probe.connect_ex(("127.0.0.1", port)) == 0

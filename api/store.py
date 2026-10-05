@@ -6,7 +6,7 @@ later swap additive.
 
 WHAT CHANGED AND WHY IT MATTERED. The previous version was written only
 from api/main.py, so neither voice path persisted anything: a Gemini Live
-session left no transcript at all, and the ElevenLabs path received an
+session left no transcript at all, and the voice path received an
 utterance record and dropped it. `GET /review` returned an empty
 transcript for every voice session, which made them undebriefable --
 exactly the thing a training tool exists to support.
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     mission_id      TEXT NOT NULL,
     mission_version INTEGER NOT NULL,
     mission_title   TEXT,
-    channel         TEXT,              -- text | elevenlabs | gemini_live
+    channel         TEXT,              -- text | gemini_live
     started_at      TEXT NOT NULL,
     ended_at        TEXT,
     status          TEXT NOT NULL DEFAULT 'preparing'
@@ -104,6 +104,7 @@ class SqliteSessionStore:
     """
 
     def __init__(self, path: str | Path = "./maslul.db") -> None:
+        """Resolve the database path and create the schema, holding one connection open only for :memory:."""
         self.path = str(path)
         self._memory: sqlite3.Connection | None = None
         if self.path == ":memory:":
@@ -164,6 +165,7 @@ class SqliteSessionStore:
 
     def _next_seq(self, connection: sqlite3.Connection, table: str,
                   session_id: str) -> int:
+        """The next per-session sequence number, so rows order by mission time without a timestamp."""
         row = connection.execute(
             f"SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM {table} "
             f"WHERE session_id = ?", (session_id,),
@@ -176,6 +178,7 @@ class SqliteSessionStore:
                        mission_version: int, started_at: str,
                        mission_title: str | None = None,
                        channel: str | None = None) -> None:
+        """Insert the row for a new session."""
         with self._connect() as connection:
             connection.execute(
                 """INSERT OR REPLACE INTO sessions
@@ -188,6 +191,7 @@ class SqliteSessionStore:
 
     def set_status(self, session_id: str, status: str,
                    ended_at: str | None = None) -> None:
+        """Update a session's status, and its end time when it is ending."""
         with self._connect() as connection:
             if ended_at:
                 connection.execute(
@@ -201,6 +205,7 @@ class SqliteSessionStore:
                 )
 
     def set_channel(self, session_id: str, channel: str) -> None:
+        """Record which channel the session actually ran on."""
         with self._connect() as connection:
             connection.execute(
                 "UPDATE sessions SET channel = ? WHERE session_id = ?",
@@ -232,6 +237,7 @@ class SqliteSessionStore:
     def add_revealed(self, session_id: str, event_id: str,
                      mission_seconds: float, reported: bool = False,
                      disposition: str = "pending") -> None:
+        """Record that an event was revealed, and whether it was ever reported."""
         with self._connect() as connection:
             seq = self._next_seq(connection, "revealed_events", session_id)
             connection.execute(
@@ -247,6 +253,7 @@ class SqliteSessionStore:
                       mission_seconds: float, tags: list[str] | None = None,
                       entity_ids: list[str] | None = None,
                       description: str = "", status: str = "active") -> None:
+        """Record a reporting agreement and what it covers, for the debrief."""
         with self._connect() as connection:
             seq = self._next_seq(connection, "agreements", session_id)
             connection.execute(
@@ -262,6 +269,7 @@ class SqliteSessionStore:
     # -- reads ------------------------------------------------------------
 
     def list_sessions(self, limit: int = 50) -> list[SessionSummary]:
+        """Past sessions, newest first."""
         with self._connect() as connection:
             rows = connection.execute(
                 """SELECT s.*, (SELECT COUNT(*) FROM utterances u
@@ -280,6 +288,7 @@ class SqliteSessionStore:
         ]
 
     def session(self, session_id: str) -> dict[str, Any] | None:
+        """One session's row, or None."""
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT * FROM sessions WHERE session_id = ?", (session_id,),
@@ -309,6 +318,7 @@ class SqliteSessionStore:
         ]
 
     def revealed(self, session_id: str) -> list[dict[str, Any]]:
+        """Which events were revealed, in order, with their reporting disposition."""
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT * FROM revealed_events WHERE session_id = ? ORDER BY seq",
@@ -321,6 +331,7 @@ class SqliteSessionStore:
         ]
 
     def agreements(self, session_id: str) -> list[dict[str, Any]]:
+        """Which reporting agreements were made, in order."""
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT * FROM agreements WHERE session_id = ? ORDER BY seq",

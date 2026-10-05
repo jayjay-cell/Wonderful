@@ -1,6 +1,6 @@
 """The exercise runner: one shared domain loop for every channel.
 
-Replaces sim/runner.py's simulator loop. Text, the ElevenLabs cascade and
+Replaces sim/runner.py's simulator loop. Text and
 Gemini Live all drive THIS -- only audio transport differs. The previous
 version had a second, silently divergent trigger loop inside
 api/live_voice.py, which meant the Live path could not fire callsign or
@@ -57,6 +57,7 @@ class PendingReport:
 
     @property
     def priority(self) -> Priority:
+        """The authored priority of the event this report is for."""
         return self.event.priority
 
 
@@ -95,6 +96,7 @@ class Exercise:
         session_id: str | None = None,
         clock: Any | None = None,
     ) -> None:
+        """Wire the mission, timeline and model together and build the empty runtime state."""
         self.mission = mission
         self.timeline = timeline
         self.context = context
@@ -113,7 +115,17 @@ class Exercise:
 
         self._model = model
         self._pending: list[PendingReport] = []
-        self._revealed_through: float = 0.0
+        # Event ids a delivery is currently attempting. Keeps a report out
+        # of a second claim without removing it from the queue.
+        self._claimed: set[str] = set()
+        # Below zero so an event authored at exactly 00:00 falls inside the
+        # first tick's (since, until] window. At 0.0 it never would.
+        self._revealed_through: float = -1.0
+
+        # Which loop delivers reports. Gemini Live speaks them itself, so
+        # it takes ownership and the Session's speak loop stands down --
+        # otherwise both consume one queue and a report fires twice.
+        self.reports_owner: str = "session"
 
         # One utterance at a time, so two reports cannot overlap.
         self._speaking = asyncio.Lock()
@@ -134,6 +146,7 @@ class Exercise:
                     mission_id=self.mission.id)
 
     def start(self) -> None:
+        """Begin mission time. The trainer presses play on the video at this same moment."""
         self.clock.start()
         logger.info("exercise.started", session_id=self.session_id)
 
@@ -177,9 +190,11 @@ class Exercise:
 
     @property
     def phase(self) -> Phase:
+        """The current lifecycle phase, from the clock."""
         return self.clock.phase
 
     def set_channel(self, channel: Any) -> None:
+        """Attach the delivery channel that will render this exercise's speech."""
         self._channel = channel
 
     # -- revelation (never blocks) ----------------------------------------
@@ -195,7 +210,7 @@ class Exercise:
             return ()
 
         now = self.clock.now()
-        if now <= self._revealed_through:
+        if now < 0.0 or now <= self._revealed_through:
             return ()
 
         newly = self.timeline.newly_revealed(self._revealed_through, now)
@@ -257,6 +272,7 @@ class Exercise:
         return tuple(self._pending)
 
     def handover_active(self) -> TimelineEvent | None:
+        """The handover event covering this moment, or None."""
         return self.timeline.handover_at(self.clock.now())
 
     def crew_available(self, priority: Priority = Priority.NORMAL) -> bool:
@@ -275,12 +291,17 @@ class Exercise:
 
     # -- delivery (may block) ---------------------------------------------
 
-    def next_report(self) -> PendingReport | None:
-        """The next report that should be spoken, or None.
+    def claim_report(self) -> PendingReport | None:
+        """Take the next report to speak, or None.
 
         Re-checked against the clock at the point of delivery rather than
         when queued: an interval that has since closed, or an expiry that
         has passed, is dropped instead of announced as news.
+
+        CLAIMED, not removed. The report stays queued and merely becomes
+        invisible to another claim, so a delivery that fails or is
+        abandoned can be released and retried. Removing it here is what
+        previously lost a report whenever a pause landed mid-generation.
         """
         if not self.clock.is_running or not self._pending:
             return None
@@ -292,14 +313,16 @@ class Exercise:
             if report.event.is_stale_at(now):
                 self.log.dropped.append((now, report.event.event_id, "stale"))
                 continue
+            kept.append(report)
+            if report.event.event_id in self._claimed:
+                continue                     # another delivery has it
             if not self.crew_available(report.priority):
                 self.log.handover_blocks += 1
-                kept.append(report)          # deferred, never dropped
-                continue
+                continue                     # deferred, never dropped
             ready.append(report)
 
+        self._pending = kept
         if not ready:
-            self._pending = kept
             return None
 
         # Urgent first, then oldest, so a time-critical report is not
@@ -307,8 +330,24 @@ class Exercise:
         order = {Priority.URGENT: 0, Priority.HIGH: 1, Priority.NORMAL: 2}
         ready.sort(key=lambda r: (order[r.priority], r.queued_at))
         chosen = ready[0]
-        self._pending = kept + [r for r in ready if r is not chosen]
+        self._claimed.add(chosen.event.event_id)
         return chosen
+
+    def release_report(self, report: PendingReport) -> None:
+        """Un-claim a report that was not actually delivered, so it retries.
+
+        Relevance is re-checked by the next claim_report(), so a report
+        that has since gone stale is dropped rather than retried forever.
+        """
+        self._claimed.discard(report.event.event_id)
+
+    def complete_report(self, report: PendingReport) -> None:
+        """Mark a report as genuinely spoken: drop it and record it reported."""
+        self._claimed.discard(report.event.event_id)
+        self._pending = [
+            r for r in self._pending if r.event.event_id != report.event.event_id
+        ]
+        self.ledger.mark_reported(report.event.event_id)
 
     def may_interrupt(self, priority: Priority) -> bool:
         """Whether a report may cut across trainee speech.
@@ -351,6 +390,7 @@ class Exercise:
     # -- generation guard -------------------------------------------------
 
     def generation(self) -> int:
+        """The current generation counter, taken before a model call to detect a pause or end during it."""
         return self._generation
 
     def is_current_generation(self, generation: int) -> bool:

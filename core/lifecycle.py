@@ -53,6 +53,7 @@ class ExerciseClock:
     """
 
     def __init__(self) -> None:
+        """Start in PREPARING with no start time and zero elapsed mission time."""
         self._phase = Phase.PREPARING
         self._started_at: float | None = None      # monotonic at Start
         self._frozen_elapsed: float = 0.0          # mission time at pause
@@ -62,14 +63,17 @@ class ExerciseClock:
 
     @property
     def phase(self) -> Phase:
+        """The current lifecycle phase."""
         return self._phase
 
     @property
     def is_running(self) -> bool:
+        """True only in RUNNING -- paused and ended both read False."""
         return self._phase is Phase.RUNNING
 
     @property
     def is_ended(self) -> bool:
+        """True once the exercise has stopped for good."""
         return self._phase is Phase.ENDED
 
     def now(self) -> float:
@@ -86,9 +90,11 @@ class ExerciseClock:
 
     @property
     def duration(self) -> float | None:
+        """The authored end time in seconds, or None if the exercise is open-ended."""
         return self._duration
 
     def is_past_duration(self) -> bool:
+        """True when mission time has reached the authored end."""
         return self._duration is not None and self.now() >= self._duration
 
     # -- transitions ------------------------------------------------------

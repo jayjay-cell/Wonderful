@@ -42,6 +42,7 @@ class MissionError(Exception):
 
     def __init__(self, code: str, message: str, path: str | None = None,
                  source: str | Path | None = None) -> None:
+        """Carry the offending field's path alongside the message, so a bad mission file says where."""
         where = f" at {path}" if path else ""
         origin = f" in {Path(source).name}" if source else ""
         super().__init__(f"[{code}]{origin}{where}: {message}")
@@ -130,14 +131,18 @@ class HandoverPolicy(BaseModel):
 
     Timing is authored in the TIMELINE, not here: a recording can start
     partway through a shift, so a fixed four-hour schedule would be wrong
-    for most exercises.
+    for most exercises. What the crew SAYS at the rotation is the handover
+    event's own `operator_information`.
+
+    ACTUAL BEHAVIOUR ACROSS A HANDOVER: facts and agreements carry
+    straight over, because one exercise keeps one timeline and one
+    ledger. There is no separate incoming-crew memory, so settings for
+    inheritance or re-briefing would have described something the engine
+    does not do -- they were declared, documented, and read nowhere, and
+    are deliberately absent rather than silently ignored.
     """
 
-    announcement: str = ""              # e.g. "אנחנו בהחלפת צוותים, שתי דקות"
     busy_reply: str = ""                # if called mid-handover
-    inherit_facts: bool = True          # incoming crew knows established facts
-    inherit_commitments: bool = True    # and honours existing agreements
-    expects_rebrief: bool = False
     allow_urgent: bool = True           # authored urgent events may still come
 
 
@@ -167,17 +172,6 @@ class Reporting(BaseModel):
     allow_urgent_interruption: bool = True
 
 
-class Realism(BaseModel):
-    """Optional delivery tuning. Conservative by default, because an
-    over-hesitant operator reads as a broken connection."""
-
-    response_delay_ms: tuple[int, int] = (500, 1800)
-    stall_probability: float = Field(default=0.12, ge=0.0, le=1.0)
-    filler_probability: float = Field(default=0.12, ge=0.0, le=1.0)
-    filler_sounds: list[str] = Field(default_factory=list)
-    seed: int | None = None
-
-
 class PrivateNotes(BaseModel):
     """Author/debrief material. NEVER reaches the operator.
 
@@ -193,6 +187,7 @@ class PrivateNotes(BaseModel):
 
     @model_validator(mode="after")
     def _must_stay_hidden(self) -> "PrivateNotes":
+        """Force private notes invisible to the operator, whatever the file says."""
         if self.visible_to_operator:
             raise ValueError(
                 "private.visible_to_operator must be false; this section exists "
@@ -218,7 +213,6 @@ class Mission(BaseModel):
     handover: HandoverPolicy = Field(default_factory=HandoverPolicy)
     impossible_requests: ImpossibleRequests = Field(default_factory=ImpossibleRequests)
     reporting: Reporting = Field(default_factory=Reporting)
-    realism: Realism = Field(default_factory=Realism)
     private: PrivateNotes = Field(default_factory=PrivateNotes)
 
     # Initial readings: free-form, all optional. A dict rather than a typed

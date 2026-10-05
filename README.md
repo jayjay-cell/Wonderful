@@ -36,7 +36,7 @@ python run.py                 # http://localhost:8000
 ### Validate without a model
 
 ```bash
-pytest                                                   # 96 tests, offline
+pytest                                                   # 121 tests, offline
 python -m sim.cli --mission missions/synthetic_he.yaml
 python -m sim.cli --mission missions/synthetic_he.yaml --walk 20
 ```
@@ -66,18 +66,21 @@ python timelines/make_template.py     # formatted Excel template
 
 ## Voice
 
-Two paths, chosen per session. Both share all domain behaviour; only audio
-transport differs.
+Gemini Live, native Hebrew speech-to-speech: one model hears, reasons and
+speaks in a single session. No second account — it uses `GEMINI_API_KEY`.
+Pacing and prosody are the model's own.
 
-| | Gemini Live | ElevenLabs cascade |
-|---|---|---|
-| Extra key | **none** — uses `GEMINI_API_KEY` | `ELEVENLABS_API_KEY` |
-| Shape | one model hears and speaks | STT → agent → TTS |
-| Pacing | the model's own prosody | authored stalls apply |
-| Vocabulary hints | not supported by the API | yes, from the mission |
+Pick the channel per session in the UI; the text channel runs the same
+domain layer, so timeline, reports, agreements and persistence behave
+identically either way.
 
-Gemini Live needs no second account and is the quickest way to hear it. The
-cascade accepts recognition hints, which matters for domain vocabulary.
+Known limits, stated rather than papered over:
+
+- Recognition hints are not supported by the Live API, so domain
+  vocabulary is not biased toward the mission's terms.
+- The model transcribes its own speech, so when the trainee talks over it
+  what they actually heard can only be estimated. Those rows are stored
+  with `delivery="streamed"` to record that limit.
 
 ---
 

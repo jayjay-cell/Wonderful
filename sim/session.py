@@ -1,6 +1,6 @@
 """The shared session layer: lifecycle, the domain loop, persistence.
 
-EVERY CHANNEL DRIVES THIS. Text, the ElevenLabs cascade and Gemini Live
+EVERY CHANNEL DRIVES THIS. Text and Gemini Live
 differ only in how audio moves; timeline, facts, commitments, handover,
 lifecycle and persistence all live here. The previous version let
 api/live_voice.py reimplement the domain layer, which silently lost two
@@ -46,6 +46,7 @@ class Session:
         channel: str = "text",
         on_utterance: Callable[[Utterance], Any] | None = None,
     ) -> None:
+        """Hold the exercise, turn runner and store, and create the loops' task slots and the speaking lock."""
         self.exercise = exercise
         self.turns = turns
         self.store = store
@@ -64,7 +65,8 @@ class Session:
         self._speaking = asyncio.Lock()
 
         self._persisted_reveals: set[str] = set()
-        self._persisted_agreements: set[str] = set()
+        # commitment_id -> last status written, so a change is noticed.
+        self._persisted_agreements: dict[str, str] = {}
 
     # -- lifecycle --------------------------------------------------------
 
@@ -95,6 +97,7 @@ class Session:
             self.store.set_status(self.exercise.session_id, "paused")
 
     async def resume(self) -> None:
+        """Continue from the frozen mission time and mark the session running again."""
         self.exercise.resume()
         if self.store is not None:
             self.store.set_status(self.exercise.session_id, "running")
@@ -114,6 +117,7 @@ class Session:
 
     @property
     def phase(self) -> Phase:
+        """The current lifecycle phase, from the exercise."""
         return self.exercise.phase
 
     # -- the two loops ----------------------------------------------------
@@ -130,6 +134,7 @@ class Session:
                 newly = self.exercise.advance()
                 for event in newly:
                     self._persist_reveal(event.event_id)
+                self._persist_dropped()
                 self._persist_new_agreements()
 
                 if self.exercise.phase is Phase.ENDED:
@@ -153,7 +158,12 @@ class Session:
                 if not self.exercise.clock.is_running:
                     continue
 
-                report = self.exercise.next_report()
+                # Gemini Live delivers its own reports, in its own session.
+                # Standing down here is what keeps one consumer per queue.
+                if self.exercise.reports_owner != "session":
+                    continue
+
+                report = self.exercise.claim_report()
                 if report is not None:
                     await self._speak_report(report)
                     continue
@@ -168,6 +178,7 @@ class Session:
                              error_code=type(err).__name__, status="error")
 
     async def _speak_report(self, report: Any) -> None:
+        """Deliver one owed report, recording it only if it was actually said."""
         async with self._speaking:
             result = await self.turns.report_turn(
                 report.event.operator_information,
@@ -175,17 +186,22 @@ class Session:
                 report.event.instructions,
                 report.event.priority,
             )
-            if result.abandoned:
-                # Paused or ended mid-generation. Nothing was said, so
-                # nothing is recorded -- and the report stays owed.
+            if result.abandoned or result.failed:
+                # Paused, ended, or the provider failed mid-generation.
+                # Nothing was said, so nothing is recorded and the report
+                # goes back on the queue to be retried while it stays
+                # relevant.
+                self.exercise.release_report(report)
                 self._persist_reveal(report.event.event_id,
                                      disposition="pending")
                 return
             self._record("operator", result)
+            self.exercise.complete_report(report)
             self._persist_reveal(report.event.event_id, reported=True,
                                  disposition="delivered")
 
     async def _speak_briefing_request(self) -> None:
+        """Have the crew ask for the briefing it never received."""
         async with self._speaking:
             result = await self.turns.briefing_request_turn()
             if not result.abandoned:
@@ -216,13 +232,19 @@ class Session:
                 self._record("operator", result)
             return result
 
-    def note_shared(self, fact: str) -> None:
+    def note_shared(self, fact: str, briefing: bool = False) -> None:
         """Record context the trainee supplied.
 
         Glok may reason with it, attributed -- it never overwrites what the
         recording shows.
+
+        `briefing=True` marks the opening briefing as given, which is the
+        transition that stops a proactive crew asking for it. Nothing
+        reached BRIEFED before, so the crew asked even after being told.
         """
         self.exercise.state.note_shared(fact)
+        if briefing:
+            self.exercise.state.mark_briefed()
 
     # -- recording --------------------------------------------------------
 
@@ -276,6 +298,18 @@ class Session:
             disposition=disposition,
         )
 
+    def _persist_dropped(self) -> None:
+        """Record reports dropped as stale, so a debrief sees them.
+
+        A report that expired before it could be spoken is a fact about
+        the exercise; leaving it only in the in-memory log meant it
+        vanished with the process.
+        """
+        if self.store is None:
+            return
+        for _at, event_id, reason in self.exercise.log.dropped:
+            self._persist_reveal(event_id, disposition=reason)
+
     def _persist_new_agreements(self) -> None:
         """Record agreements the model made via its tools.
 
@@ -285,9 +319,14 @@ class Session:
         if self.store is None:
             return
         for commitment in self.exercise.ledger.commitments:
-            if commitment.commitment_id in self._persisted_agreements:
+            # Keyed by id AND status, so a later cancel or supersede is
+            # written too. Keying by id alone froze every agreement at
+            # "active" in the store however it actually ended.
+            seen = self._persisted_agreements.get(commitment.commitment_id)
+            if seen == commitment.status.value:
                 continue
-            self._persisted_agreements.add(commitment.commitment_id)
+            self._persisted_agreements[commitment.commitment_id] = \
+                commitment.status.value
             self.store.add_agreement(
                 self.exercise.session_id, commitment.commitment_id,
                 self.exercise.clock.now(), list(commitment.tags),

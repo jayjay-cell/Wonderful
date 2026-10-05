@@ -156,11 +156,8 @@ behaviour:
 reestablish_silence: 30          # formal addressing returns after this
 
 handover:
-  announcement: "..."
-  busy_reply: "..."
-  inherit_facts: true
-  inherit_commitments: true
-  allow_urgent: true
+  busy_reply: "..."              # if called mid-rotation
+  allow_urgent: true             # authored urgent events still come through
 
 impossible_requests:
   explanations:
@@ -256,5 +253,5 @@ The clock measures elapsed time since the recording began, in real time.
 There is no speed control: the exercise runs beside a video in a separate
 player, and accelerating one would desynchronise them.
 
-Keys in `.env`: `GEMINI_API_KEY` always; `ELEVENLABS_API_KEY` only for the
-cascade voice path.
+Key in `.env`: `GEMINI_API_KEY`. Voice uses the same key — Gemini Live
+needs no separate speech account.

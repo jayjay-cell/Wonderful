@@ -75,6 +75,7 @@ class ConversationState:
                 self.briefing_stage = BriefingStage.CONTACT
 
     def operator_spoke(self, at: float) -> None:
+        """Record that Glok transmitted, which resets the silence used to decide re-addressing."""
         self.last_operator_at = at
 
     def note_shared(self, fact: str) -> None:
@@ -84,6 +85,7 @@ class ConversationState:
             self.shared_by_trainee.append(fact)
 
     def mark_briefed(self) -> None:
+        """Note that the opening briefing happened, so the crew stops asking for it."""
         self.briefing_stage = BriefingStage.BRIEFED
 
     # -- addressing -------------------------------------------------------
@@ -141,4 +143,5 @@ class ConversationState:
         return self.silence_seconds(at) >= grace_seconds
 
     def mark_briefing_requested(self) -> None:
+        """Note that the crew already asked for the briefing, so it asks only once."""
         self.briefing_requested = True
