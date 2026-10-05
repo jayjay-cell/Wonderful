@@ -48,6 +48,7 @@ class OllamaProvider:
         return False
 
     def chat_model(self):
+        """Build the chat model; raises ProviderError if no model is chosen."""
         if not self._model:
             raise ProviderError(
                 "OLLAMA_MODEL is not set. Choose a model explicitly rather than "

@@ -127,6 +127,7 @@ class Exercise:
     # -- lifecycle --------------------------------------------------------
 
     def mark_ready(self) -> None:
+        """Preparation done. Mission time is still zero."""
         duration = self.mission.duration_seconds or self.timeline.duration or None
         self.clock.mark_ready(duration)
         logger.info("exercise.ready", session_id=self.session_id,
@@ -167,6 +168,7 @@ class Exercise:
                     mission_seconds=int(now))
 
     def end(self) -> None:
+        """Stop for good and discard anything still owed."""
         self.clock.end()
         self._generation += 1
         self._pending.clear()

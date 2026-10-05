@@ -96,6 +96,7 @@ EXAMPLE_FILL = PatternFill("solid", fgColor="FEF3C7")
 
 
 def build(output: Path) -> Path:
+    """Write the formatted .xlsx: headers with hover notes, plus example rows."""
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "timeline"
@@ -132,6 +133,7 @@ def build(output: Path) -> Path:
 
 
 def main(argv: list[str]) -> int:
+    """Generate the template at the given path, or the default."""
     output = Path(argv[1]) if len(argv) > 1 else ROOT / "timeline_template.xlsx"
     path = build(output)
     print(f"\n  wrote {path}")

@@ -39,6 +39,7 @@ SAMPLE_RATE = 16000
 
 
 class TurnState(str, Enum):
+    """Whether the trainee is talking, and whether they have finished."""
     SILENT = "silent"            # nobody talking
     TRAINEE_SPEAKING = "trainee_speaking"
     TRAINEE_FINISHED = "trainee_finished"   # ready to reply

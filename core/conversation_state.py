@@ -66,6 +66,7 @@ class ConversationState:
     # -- recording --------------------------------------------------------
 
     def trainee_spoke(self, at: float, text: str = "") -> None:
+        """Record a trainee transmission; the first one establishes contact."""
         self.last_trainee_at = at
         self.turn_count += 1
         if not self.contact_established:

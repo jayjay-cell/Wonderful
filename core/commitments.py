@@ -34,6 +34,7 @@ from core.timeline import Priority, ReportingPolicy, Timeline, TimelineEvent
 
 
 class CommitmentStatus(str, Enum):
+    """Whether an agreement still stands. Cancelled and superseded are kept for the debrief."""
     ACTIVE = "active"
     CANCELLED = "cancelled"
     SUPERSEDED = "superseded"      # narrowed or replaced by a later agreement
@@ -59,6 +60,7 @@ class Commitment:
         return self.status is CommitmentStatus.ACTIVE
 
     def covers(self, event: TimelineEvent) -> bool:
+        """Whether this agreement obliges a report for that event."""
         if not self.is_active:
             return False
         if event.start_time <= self.from_time:

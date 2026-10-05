@@ -146,6 +146,7 @@ class ElevenLabsTTS:
             raise ProviderError(f"TTS stream failed: {type(err).__name__}") from err
 
     def is_unavailable_error(self, err: Exception) -> bool:
+        """True only for a recognised transient failure; a real bug propagates."""
         message = str(err).lower()
         if any(fatal in message for fatal in ("401", "invalid api key", "quota_exceeded")):
             return False

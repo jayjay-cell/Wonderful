@@ -150,6 +150,7 @@ class GeminiLiveProvider:
         ) from last_error
 
     def is_unavailable_error(self, err: Exception) -> bool:
+        """True only for a recognised transient failure; a real bug propagates."""
         message = str(err).lower()
         if any(fatal in message for fatal in (
             "api key not valid", "permission denied", "invalid argument",

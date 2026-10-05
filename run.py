@@ -33,6 +33,7 @@ def _port_in_use(port: int) -> bool:
 
 
 def main() -> int:
+    """Serve the API and UI on one origin, refusing to start if the port is taken."""
     from dotenv import load_dotenv
     load_dotenv()
 

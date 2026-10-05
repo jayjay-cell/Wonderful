@@ -81,6 +81,7 @@ class GeminiProvider:
         return True
 
     def chat_model(self):
+        """Build the chat model; raises ProviderError if the key is missing."""
         if not self._api_key:
             raise ProviderError(
                 "GEMINI_API_KEY is not set. Add it to .env (get one at "

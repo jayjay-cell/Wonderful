@@ -46,6 +46,7 @@ SAMPLE_RATE = 16000
 
 @dataclass(frozen=True)
 class Transcript:
+    """One STT result. is_final distinguishes a committed transcript from a guess."""
     text: str
     is_final: bool
     confidence: float | None = None
@@ -161,6 +162,7 @@ class ElevenLabsSTT:
             raise ProviderError(f"STT stream failed: {type(err).__name__}") from err
 
     def is_unavailable_error(self, err: Exception) -> bool:
+        """True only for a recognised transient failure; a real bug propagates."""
         message = str(err).lower()
         if any(fatal in message for fatal in ("401", "invalid api key", "quota_exceeded")):
             return False

@@ -33,6 +33,7 @@ from typing import Any, Iterable, Mapping
 
 
 class EventType(str, Enum):
+    """How an event behaves in time. Semantics are in the module docstring."""
     POINT = "point"
     PERSISTENT = "persistent"
     INTERVAL = "interval"
@@ -53,6 +54,7 @@ class ReportingPolicy(str, Enum):
 
 
 class Priority(str, Enum):
+    """How urgently a report is owed. Only urgent interrupts or crosses a handover."""
     NORMAL = "normal"
     HIGH = "high"
     URGENT = "urgent"

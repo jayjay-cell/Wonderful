@@ -69,6 +69,7 @@ class StructuredLogger:
         self._logger = logging.getLogger(name)
 
     def _emit(self, level: int, event: str, **fields: Any) -> None:
+        """Filter fields through the allowlist and write one key=value line."""
         safe = {k: v for k, v in fields.items() if k in ALLOWED_FIELDS and v is not None}
         safe.pop("event", None)
         rendered = " ".join(f"{k}={v}" for k, v in sorted(safe.items()))

@@ -28,6 +28,7 @@ from enum import Enum
 
 
 class Phase(str, Enum):
+    """Where the exercise is in its lifecycle."""
     PREPARING = "preparing"
     READY = "ready"
     RUNNING = "running"
@@ -118,6 +119,7 @@ class ExerciseClock:
         self._phase = Phase.PAUSED
 
     def resume(self) -> None:
+        """Restart the clock from where the pause froze it."""
         if self._phase is not Phase.PAUSED:
             raise LifecycleError(f"cannot resume from {self._phase.value}")
         self._started_at = time.monotonic()

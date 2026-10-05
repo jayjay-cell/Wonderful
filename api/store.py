@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS agreements (
 
 @dataclass
 class SessionSummary:
+    """One row of the session list."""
     session_id: str
     mission_id: str
     mission_title: str | None
@@ -148,6 +149,7 @@ class SqliteSessionStore:
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
+        """A connection per operation; an in-memory store holds one for its lifetime."""
         if self._memory is not None:
             yield self._memory
             self._memory.commit()

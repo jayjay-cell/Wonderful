@@ -100,6 +100,7 @@ class Session:
             self.store.set_status(self.exercise.session_id, "running")
 
     async def end(self) -> None:
+        """Stop the loops, the clock and the model, and persist the final status."""
         self.exercise.end()
         self._stopped.set()
         for task in (self._reveal_task, self._speak_task):
@@ -262,6 +263,7 @@ class Session:
 
     def _persist_reveal(self, event_id: str, reported: bool = False,
                         disposition: str = "pending") -> None:
+        """Record that an event became known, and what became of its report."""
         if self.store is None:
             return
         key = f"{event_id}:{disposition}"

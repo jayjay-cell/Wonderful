@@ -46,6 +46,7 @@ def _stamp(seconds: float) -> str:
 
 
 def _summary(mission, timeline: Timeline, context_chars: int) -> None:
+    """Print what loaded: callsigns, duration, facts, event counts, handover."""
     print(f"\n  {mission.title}")
     print(f"  {'-' * 68}")
     print(f"  id           {mission.id}  (v{mission.version}, {mission.language})")
@@ -86,6 +87,7 @@ def _summary(mission, timeline: Timeline, context_chars: int) -> None:
 
 
 def _events(timeline: Timeline) -> None:
+    """Print every timeline event with its type, policy and tags."""
     print(f"  Timeline")
     print(f"  {'-' * 68}")
     print(f"  {'time':<7} {'type':<11} {'report':<13} {'pri':<7} id")
@@ -151,6 +153,7 @@ def _walk(mission, timeline: Timeline, minutes: int) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Load the three sources, report what is there, optionally walk the clock."""
     parser = argparse.ArgumentParser(
         prog="python -m sim.cli",
         description="Validate an exercise. No model or network required.",

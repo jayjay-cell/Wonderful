@@ -47,6 +47,7 @@ class VirtualClock:
         return self._duration
 
     def now(self) -> float:
+        """Elapsed mission time: zero before start, frozen while paused."""
         if self._phase in (Phase.PREPARING, Phase.READY):
             return 0.0
         if self._phase in (Phase.PAUSED, Phase.ENDED):
@@ -57,30 +58,35 @@ class VirtualClock:
         return self._duration is not None and self.now() >= self._duration
 
     def mark_ready(self, duration: float | None = None) -> None:
+        """Preparation done. Mission time is still zero."""
         if self._phase is not Phase.PREPARING:
             raise LifecycleError(f"cannot become ready from {self._phase.value}")
         self._duration = duration
         self._phase = Phase.READY
 
     def start(self) -> None:
+        """Begin the exercise."""
         if self._phase is not Phase.READY:
             raise LifecycleError(f"cannot start from {self._phase.value}")
         self._now = 0.0
         self._phase = Phase.RUNNING
 
     def pause(self) -> None:
+        """Freeze mission time where it stands."""
         if self._phase is not Phase.RUNNING:
             raise LifecycleError(f"cannot pause from {self._phase.value}")
         self._frozen = self._now
         self._phase = Phase.PAUSED
 
     def resume(self) -> None:
+        """Continue from the frozen time."""
         if self._phase is not Phase.PAUSED:
             raise LifecycleError(f"cannot resume from {self._phase.value}")
         self._now = self._frozen
         self._phase = Phase.RUNNING
 
     def end(self) -> None:
+        """Stop for good. Idempotent."""
         if self._phase is Phase.ENDED:
             return
         self._frozen = self.now()
@@ -99,6 +105,7 @@ class VirtualClock:
         self._now = seconds
 
     def advance(self, seconds: float) -> float:
+        """Move mission time forward by this many seconds."""
         if seconds < 0:
             raise ValueError(f"advance requires seconds >= 0, got {seconds}")
         self._now += seconds

@@ -68,6 +68,7 @@ def load_timeline(path: str | Path) -> Timeline:
 
 
 def _read_xlsx(path: Path) -> list[tuple[int, dict[str, Any]]]:
+    """Read an Excel sheet into (row number, row) pairs."""
     try:
         from openpyxl import load_workbook
     except ImportError as err:                      # pragma: no cover
@@ -99,6 +100,7 @@ def _read_xlsx(path: Path) -> list[tuple[int, dict[str, Any]]]:
 def _read_csv(path: Path) -> list[tuple[int, dict[str, Any]]]:
     # utf-8-sig: Excel writes a BOM, which would otherwise corrupt the
     # first header name and produce a baffling "missing event_id".
+    """Read a CSV or TSV into (row number, row) pairs."""
     with path.open(encoding="utf-8-sig", newline="") as handle:
         delimiter = "\t" if path.suffix.lower() == ".tsv" else ","
         reader = csv.reader(handle, delimiter=delimiter)
@@ -147,6 +149,7 @@ def _norm_header(cell: Any) -> str:
 
 
 def _check_header(header: list[str], path: Path) -> None:
+    """Reject a missing required column or an unknown one, naming both."""
     missing = [c for c in REQUIRED if c not in header]
     if missing:
         raise TimelineError(
@@ -167,6 +170,7 @@ def _check_header(header: list[str], path: Path) -> None:
 
 
 def _to_event(row: dict[str, Any], index: int, path: Path) -> TimelineEvent:
+    """Turn one sheet row into a validated TimelineEvent."""
     event_id = _text(row.get("event_id"))
     if not event_id:
         raise TimelineError("event_id is empty", row=index, source=path)
@@ -212,6 +216,7 @@ def _to_event(row: dict[str, Any], index: int, path: Path) -> TimelineEvent:
 
 
 def _check_cross_row(events: list[TimelineEvent], path: Path) -> None:
+    """Checks spanning rows: duplicate ids, and a reportable event with nothing to report."""
     seen: set[str] = set()
     for event in events:
         if event.event_id in seen:
@@ -286,6 +291,7 @@ def _seconds(cell: Any, field: str, index: int, path: Path) -> float:
 
 def _enum(cell: Any, enum_type: type, default: Any, field: str,
           index: int, path: Path) -> Any:
+    """Parse an enum cell, accepting the author-friendly spellings people type."""
     text = _text(cell).lower().replace(" ", "_")
     if not text:
         return default
@@ -306,6 +312,7 @@ def _enum(cell: Any, enum_type: type, default: Any, field: str,
 
 
 def _list_cell(cell: Any) -> tuple[str, ...]:
+    """Split a tags or entity_ids cell on commas or semicolons."""
     text = _text(cell)
     if not text:
         return ()
@@ -354,6 +361,7 @@ def _json_cell(cell: Any, index: int, path: Path) -> dict[str, Any]:
 
 
 def _coerce_scalar(text: str) -> Any:
+    """Turn a key=value string into a bool, int, float or string."""
     lowered = text.lower()
     if lowered in {"true", "yes"}:
         return True

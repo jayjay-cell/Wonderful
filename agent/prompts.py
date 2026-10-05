@@ -58,6 +58,7 @@ def build_system_prompt(exercise: Exercise, for_speech: bool = False) -> str:
 
 
 def _identity(exercise: Exercise) -> str:
+    """Who the operator is, who they are talking to, and the professional relationship."""
     mission = exercise.mission
     crew = mission.crew
     lines = [
@@ -144,6 +145,7 @@ def _global_context(exercise: Exercise) -> str:
 
 
 def _mission(exercise: Exercise) -> str:
+    """This exercise's setting, platform, prior briefing and reporting expectations."""
     mission = exercise.mission
     setting = mission.setting
     platform = mission.platform

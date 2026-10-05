@@ -38,6 +38,7 @@ FALLBACK = {
 
 @dataclass
 class TurnResult:
+    """What one agent turn produced, including whether it failed or was abandoned."""
     text: str
     origin: Literal["reactive", "report", "briefing_request"] = "reactive"
     event_id: str | None = None

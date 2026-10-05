@@ -105,6 +105,7 @@ class LiveBridge:
     # -- run --------------------------------------------------------------
 
     async def run(self, prompt: str) -> None:
+        """Open the Live session and run its three loops until the socket closes."""
         from providers.cloud.gemini_live import tool_declarations_for
 
         session_cm = await self.provider.connect(
@@ -198,6 +199,7 @@ class LiveBridge:
             self._stopped.set()
 
     async def _handle(self, live_session: Any, message: Any) -> None:
+        """Route one Live message: a tool call, audio, a transcript, or end of turn."""
         from providers.cloud.gemini_live import build_tool_response
 
         if message.tool_call:

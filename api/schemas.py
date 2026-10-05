@@ -31,6 +31,7 @@ class StartSessionRequest(BaseModel):
 
 
 class SessionCreated(BaseModel):
+    """What the UI needs after preparing: callsigns, briefing, duration, phase."""
     session_id: str
     mission_id: str
     title: str
@@ -46,6 +47,7 @@ class SessionCreated(BaseModel):
 class MessageRequest(BaseModel):
     # Bounded: a transmission is a radio call, not an essay, and an
     # unbounded field is an easy way to exhaust the context window.
+    """One trainee transmission."""
     text: str = Field(min_length=1, max_length=2000)
 
 

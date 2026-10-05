@@ -247,6 +247,7 @@ class Mission(BaseModel):
 
 
 def load_mission(path: str | Path) -> Mission:
+    """Read and validate a mission YAML. Raises MissionError, naming the field."""
     path = Path(path)
     if not path.exists():
         raise MissionError("FILE_NOT_FOUND", f"no such mission file: {path}")
@@ -263,6 +264,7 @@ def load_mission(path: str | Path) -> Mission:
 
 
 def load_mission_dict(raw: dict[str, Any], source: str | Path | None = None) -> Mission:
+    """Validate an already-parsed mission. Separate so tests need no temp files."""
     try:
         mission = Mission.model_validate(raw)
     except ValidationError as err:

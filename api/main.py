@@ -222,6 +222,7 @@ async def prepare_session(request: StartSessionRequest) -> SessionCreated:
 
 
 def _live(session_id: str) -> LiveSession:
+    """Look up a live session, or 404."""
     live = _sessions.get(session_id)
     if live is None:
         raise HTTPException(status_code=404, detail="no such session")
@@ -242,6 +243,7 @@ async def start_exercise(session_id: str) -> dict[str, Any]:
 
 @app.post("/sessions/{session_id}/pause")
 async def pause_exercise(session_id: str) -> dict[str, Any]:
+    """Freeze mission time. The trainer pauses the video separately."""
     live = _live(session_id)
     try:
         await live.session.pause()
@@ -253,6 +255,7 @@ async def pause_exercise(session_id: str) -> dict[str, Any]:
 
 @app.post("/sessions/{session_id}/resume")
 async def resume_exercise(session_id: str) -> dict[str, Any]:
+    """Continue from frozen time, without a burst of stale reports."""
     live = _live(session_id)
     try:
         await live.session.resume()
@@ -264,6 +267,7 @@ async def resume_exercise(session_id: str) -> dict[str, Any]:
 
 @app.post("/sessions/{session_id}/end")
 async def end_exercise(session_id: str) -> dict[str, Any]:
+    """Stop for good: clocks, loops, audio, and persist the outcome."""
     live = _sessions.pop(session_id, None)
     if live is None:
         raise HTTPException(status_code=404, detail="no such session")
@@ -278,6 +282,7 @@ async def end_exercise(session_id: str) -> dict[str, Any]:
 
 @app.post("/sessions/{session_id}/messages")
 async def send_message(session_id: str, request: MessageRequest) -> dict[str, Any]:
+    """A trainee transmission. Refused unless the exercise is running."""
     live = _live(session_id)
     if not live.session.exercise.clock.is_running:
         raise HTTPException(status_code=409,

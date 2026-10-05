@@ -31,6 +31,7 @@ from delivery.plan import DeliveryOutcome, DeliveryPlan, DeliverySegment
 
 @dataclass(frozen=True)
 class PlanStarted:
+    """Delivery of an utterance has begun."""
     plan: DeliveryPlan
 
 
@@ -49,16 +50,19 @@ class LeadInStarted:
 
 @dataclass(frozen=True)
 class SegmentStarted:
+    """One segment is now being delivered."""
     segment: DeliverySegment
 
 
 @dataclass(frozen=True)
 class SegmentEnded:
+    """One segment finished."""
     segment: DeliverySegment
 
 
 @dataclass(frozen=True)
 class PlanInterrupted:
+    """Delivery was cut short; carries what was actually said."""
     plan: DeliveryPlan
     at_segment: int
     delivered_text: str
@@ -66,6 +70,7 @@ class PlanInterrupted:
 
 @dataclass(frozen=True)
 class PlanCompleted:
+    """The whole utterance was delivered."""
     plan: DeliveryPlan
 
 
