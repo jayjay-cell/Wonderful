@@ -240,7 +240,6 @@ select:hover, input[type=text]:hover { border-color: var(--line-lit); }
     <span class="meta" id="callsigns"></span>
     <span class="spacer"></span>
     <span class="pill" id="link"><b></b><span>ממתין</span></span>
-    <span class="pill" id="toneP"><b></b><span>—</span></span>
     <span class="clock" id="clock">T+00:00</span>
     <span class="pill" id="phase"><b></b><span>הכנה</span></span>
   </header>
@@ -526,7 +525,7 @@ function addMsg(who, text, info) {
   label.className = "who";
   label.textContent = who === "trainee"
     ? session.trainee_callsign
-    : session.counterpart_callsign + (info?.origin === "initiated" ? " · יזום" : "");
+    : session.operator_callsign + (info?.origin === "initiated" ? " · יזום" : "");
   wrap.append(label);
 
   const body = document.createElement("div");
@@ -738,3 +737,6 @@ function note(text, dim = false) {
   el.append(k);
   return el;
 }
+</script>
+</body>
+</html>
