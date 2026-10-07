@@ -235,14 +235,6 @@ class Timeline:
             facts.update(event.state_updates)
         return facts
 
-    def past_observations(self, elapsed: float) -> tuple[RevealedFact, ...]:
-        """Revealed facts that are no longer current.
-
-        Recallable with past-tense phrasing; never presentable as the
-        current picture.
-        """
-        return tuple(f for f in self.revealed(elapsed) if not f.is_current)
-
     # -- handover ---------------------------------------------------------
 
     def handover_at(self, elapsed: float) -> TimelineEvent | None:

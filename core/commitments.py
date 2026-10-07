@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Iterable
 
-from core.timeline import Priority, ReportingPolicy, Timeline, TimelineEvent
+from core.timeline import ReportingPolicy, Timeline, TimelineEvent
 
 
 class CommitmentStatus(str, Enum):
@@ -179,15 +179,4 @@ class CommitmentLedger:
         """
         self.reported.add(event_id)
 
-    def covering(self, event: TimelineEvent) -> tuple[Commitment, ...]:
-        """Which agreements cover this event, for the debrief record."""
-        return tuple(c for c in self.active if c.covers(event))
 
-
-def report_priority(event: TimelineEvent) -> Priority:
-    """The priority a report inherits from its event.
-
-    A thin indirection so the reporter does not reach into the event, and
-    so a future rule (urgent only during handover, say) has one home.
-    """
-    return event.priority

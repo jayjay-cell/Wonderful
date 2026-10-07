@@ -146,7 +146,6 @@ reporting:
   instructions: |
     SYNTHETIC. מדווח יזום על שינוי משמעותי בתמונה.
     שאר המידע — לפי דרישה או לפי הסכמה בשיחה.
-  allow_urgent_interruption: true
 
 # -----------------------------------------------------------------------------
 # PRIVATE — author and debrief only. NEVER reaches the operator.

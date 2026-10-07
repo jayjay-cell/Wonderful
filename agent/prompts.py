@@ -35,9 +35,8 @@ from sim.exercise import Exercise
 def build_system_prompt(exercise: Exercise, for_speech: bool = False) -> str:
     """Assemble the prompt for the current moment.
 
-    `for_speech` adds vocal direction for a native speech-to-speech model,
-    which needs delivery guidance the text path gets from the realism
-    layer instead.
+    `for_speech` adds vocal direction for a native speech-to-speech model.
+    The text path does not need it: its output is read, not spoken.
     """
     sections = [
         _identity(exercise),
@@ -380,9 +379,8 @@ def _addressing(exercise: Exercise) -> str:
 def _vocal_direction() -> str:
     """How to SOUND, for a model that generates its own speech.
 
-    The text path gets delivery from the realism layer; a native
-    speech-to-speech model needs it stated, or it reads the words
-    correctly and sounds like a narrator.
+    A native speech-to-speech model needs this stated, or it reads the
+    words correctly and sounds like a narrator.
     """
     return "\n".join([
         "HOW YOU SOUND:",

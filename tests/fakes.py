@@ -12,7 +12,7 @@ calls precisely.
 
 from __future__ import annotations
 
-from typing import Any, Iterator, Sequence
+from typing import Any, Sequence
 
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models import BaseChatModel

@@ -16,10 +16,9 @@ What it still owns, because it genuinely differs:
   * tool execution through the Live API's own function-call protocol
   * interruption, which the model detects internally
 
-HONEST DIFFERENCE FROM THE CASCADE. Gemini Live controls its own prosody
-and pacing, so the realism layer's delivery plan does not apply here.
-Pauses and emphasis are the model's. That is a real difference in feel,
-not something to paper over.
+PROSODY IS THE MODEL'S. Pauses, pacing and emphasis come from Gemini Live
+itself; this file never shapes them. Stated because it is a real limit on
+how much of the delivery is authorable.
 """
 
 from __future__ import annotations
@@ -184,23 +183,6 @@ class LiveBridge:
         """
         return self.exercise.clock.is_running and self.exercise.crew_available()
 
-    def _record_trainee(self, text: str) -> None:
-        """Persist one trainee transmission and update conversation state.
-
-        Shared by spoken and typed input, so both reach the transcript and
-        the addressing rules identically.
-        """
-        text = text.strip()
-        if not text:
-            return
-        now = self.exercise.clock.now()
-        self.exercise.state.trainee_spoke(now, text)
-        if self.session.store is not None:
-            self.session.store.add_utterance(
-                self.exercise.session_id, speaker="trainee", text=text,
-                mission_seconds=now, origin="reactive", delivery="streamed",
-            )
-
     async def _control(self, message: dict[str, Any]) -> None:
         """Handle a non-audio message -- a typed transmission, an interruption or a stop."""
         kind = message.get("type")
@@ -211,7 +193,7 @@ class LiveBridge:
             if not self._accepting_input():
                 return
             text = str(message.get("text", ""))
-            self._record_trainee(text)
+            self.session.record_trainee(text)
             await self._live_session.send_client_content(
                 turns={"role": "user", "parts": [{"text": text}]},
                 turn_complete=True,
@@ -292,7 +274,7 @@ class LiveBridge:
             # see that contact was made.
             await self._event({"type": "final_transcript",
                                "text": content.input_transcription.text})
-            self._record_trainee(content.input_transcription.text)
+            self.session.record_trainee(content.input_transcription.text)
 
         if content.output_transcription and content.output_transcription.text:
             await self._event({"type": "counterpart_text",
@@ -305,12 +287,11 @@ class LiveBridge:
             await self._event({"type": "turn_complete"})
 
     def _flush_transcript(self, status: str = "completed") -> None:
-        """Persist the operator's turn once complete.
+        """Close out the operator's turn: record what was said, resolve any
+        report it was delivering.
 
-        Marked `delivery="streamed"`: the model transcribes its own
-        speech, so if the trainee talked over it, what they actually HEARD
-        can only be estimated. The marker records that limit rather than
-        implying a precision we do not have.
+        Recorded through the Session, not the store, so a voice transcript
+        holds the same fields as a text one.
         """
         text = self._buffer.strip()
         self._buffer = ""
@@ -322,9 +303,6 @@ class LiveBridge:
                 self.exercise.release_report(report)
             return
 
-        now = self.exercise.clock.now()
-        self.exercise.state.operator_spoke(now)
-
         # A report counts as delivered only here, and only if the turn ran
         # to completion. Cut off part-way, it is retried instead.
         delivered = report is not None and status == "completed"
@@ -333,21 +311,17 @@ class LiveBridge:
                 self.exercise.complete_report(report)
             else:
                 self.exercise.release_report(report)
-
-        if self.session.store is not None:
-            self.session.store.add_utterance(
-                self.exercise.session_id, speaker="operator", text=text,
-                mission_seconds=now,
-                origin="report" if report is not None else "reactive",
-                event_id=report.event.event_id if report is not None else None,
-                status=status, delivery="streamed",
+            self.session.recorder.revealed(
+                report.event.event_id, reported=delivered,
+                disposition="delivered" if delivered else "pending",
             )
-            if report is not None:
-                self.session.store.add_revealed(
-                    self.exercise.session_id, report.event.event_id, now,
-                    reported=delivered,
-                    disposition="delivered" if delivered else "pending",
-                )
+
+        self.session.record_operator(
+            text,
+            origin="report" if report is not None else "reactive",
+            event_id=report.event.event_id if report is not None else None,
+            status=status,
+        )
 
     # -- reports ----------------------------------------------------------
 

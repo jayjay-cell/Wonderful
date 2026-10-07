@@ -166,10 +166,6 @@ class Reporting(BaseModel):
     """Baseline reporting expectations, beyond per-event policy."""
 
     instructions: str = ""
-    # Urgent events may cut across trainee speech. A crew that interrupts
-    # routinely is a nuisance; one that never does is unrealistic when
-    # something matters, so this is on but gated on event priority.
-    allow_urgent_interruption: bool = True
 
 
 class PrivateNotes(BaseModel):

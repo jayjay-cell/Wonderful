@@ -1,0 +1,170 @@
+# =============================================================================
+#  ⚠  FICTIONAL TRAINING MATERIAL — NOT OPERATIONAL CONTENT
+#
+#  Every value in this file is invented for training practice: the house,
+#  the road, the vehicle, the person, the area, the crew, the platform and
+#  all phrasing. No part of it describes a real place, a real event, or
+#  validated professional doctrine. Replace it all before any real use.
+#
+#  Callsigns are the one exception — גלוק and מדבקה were supplied.
+#
+#  This is source C of three:
+#    context/*.md                     reusable professional knowledge
+#    timelines/lebanon_vehicle.csv    what happens during the recording
+#    missions/lebanon_vehicle.yaml    ← this file
+#
+#  Validate without a model:
+#    python -m sim.cli --mission missions/lebanon_vehicle.yaml
+# =============================================================================
+
+id: lebanon_vehicle
+version: 1
+language: he
+title: "Vehicle departure and follow — 3 min (fictional)"
+
+# Exactly three minutes. The timeline's last event is at 02:55, so this
+# pins the end five seconds after it: the exercise closes with the vehicle
+# stopped and nothing further observed.
+duration_seconds: 180
+
+# -----------------------------------------------------------------------------
+# WHO IS ON THE NET
+# -----------------------------------------------------------------------------
+callsigns:
+  operator: "גלוק"              # supplied
+  trainee: "מדבקה"              # supplied
+  controller: "משנה"            # named in context; NOT simulated
+
+# -----------------------------------------------------------------------------
+# WHERE AND WHY
+# -----------------------------------------------------------------------------
+setting:
+  purpose: "FICTIONAL: לעקוב אחר תנועה מהמבנה ולזהות לאן היא מתפתחת"
+  area: "FICTIONAL: אזור כפרי בלבנון, מבנה בודד ליד דרך מקומית"
+  background: |
+    FICTIONAL. כטב"ם באוויר מעל אזור היעד במשימת איסוף.
+    ההקלטה מתחילה כשהמבנה כבר בשדה הראייה.
+  before_recording: |
+    FICTIONAL. המשימה החלה כ-25 דקות לפני תחילת ההקלטה.
+    עד לנקודה זו לא תועדה תנועה סביב המבנה.
+
+  # Shown to the TRAINEE before starting. Never given to the model —
+  # it may carry intent the operator must not know.
+  trainee_briefing: |
+    FICTIONAL. אתה קמ"ק, קריאה מדבקה.
+    בשדה הראייה מבנה בודד ליד דרך מקומית.
+    עליך לנהל את המשימה מול הצוות ולקבוע מה משמעות התנועה סביב המבנה.
+    התרגיל נמשך שלוש דקות.
+
+# -----------------------------------------------------------------------------
+# THE CREW
+# -----------------------------------------------------------------------------
+crew:
+  operator_name: "FICTIONAL: לא צוין"
+  role: "מפעיל כטב\"ם"
+  experience: "FICTIONAL: ותק בינוני על הדגם"
+  composition: "FICTIONAL: צוות של שלושה; מדבקה מדבר בעיקר עם אחד"
+  gender: "male"
+
+  # What the crew was told at the squadron. Glok holds this from the first
+  # word. It must NOT contain unrevealed timeline events.
+  prior_briefing: |
+    FICTIONAL. הצוות תודרך בטייסת על איסוף מעל האזור,
+    ועל מבנה בודד שנמצא בשדה הראייה.
+    הצוות לא יודע מה יקרה בהמשך ההקלטה.
+
+# -----------------------------------------------------------------------------
+# PLATFORM — what the crew can and cannot do
+# -----------------------------------------------------------------------------
+platform:
+  aircraft: "FICTIONAL: כטב\"ם איסוף"
+  sensor: "FICTIONAL: מצלמה יומית"
+
+  capabilities:
+    - "FICTIONAL: צילום רציף של אזור היעד"
+
+  # The recording is FIXED. Nothing the trainee says changes the picture,
+  # the camera, or the aircraft. The 01:15 shift to following the vehicle
+  # is an authored event, not a response to a request.
+  limitations:
+    - "FICTIONAL: התמונה קבועה ואינה משתנה לפי בקשה"
+    - "FICTIONAL: אין שליטה על זום, זווית מצלמה או גובה"
+    - "FICTIONAL: אין אפשרות לחזור אחורה בתמונה"
+    - "FICTIONAL: מעבר למעקב מתרחש לפי מהלך המשימה בלבד"
+
+# -----------------------------------------------------------------------------
+# BEHAVIOUR
+# -----------------------------------------------------------------------------
+behaviour:
+  initiative: 0.7                # proactive: volunteers significant change
+  challenge: 0.4                 # pushes back sometimes, not constantly
+  verbosity: 0.4                 # short radio turns
+  patience: 0.6
+  style: |
+    FICTIONAL. מדבר קצר וענייני, כמו ברשת קשר.
+    מתאר מה רואה, לא מה מסיק. לא מזהה אנשים.
+    כשהתמונה לא ברורה — אומר זאת במקום לנחש.
+  briefing_request_after: 60     # seconds before a proactive crew asks
+
+reestablish_silence: 30          # formal addressing returns after this
+
+# -----------------------------------------------------------------------------
+# REPORTING
+# -----------------------------------------------------------------------------
+reporting:
+  instructions: |
+    FICTIONAL. מדווח יזום על שינוי משמעותי בתמונה:
+    תנועה, יציאה לדרך, מעבר למעקב, עצירה.
+    שאר המידע — לפי דרישה או לפי הסכמה בשיחה.
+
+# -----------------------------------------------------------------------------
+# IMPOSSIBLE REQUESTS — answered in role, never by breaking character
+# -----------------------------------------------------------------------------
+impossible_requests:
+  explanations:
+    zoom: "FICTIONAL: אין שליטה על הזום בשלב הזה."
+    camera: "FICTIONAL: אין שליטה על זווית המצלמה בשלב הזה."
+    altitude: "FICTIONAL: הגובה נקבע מראש ואינו משתנה בשלב הזה."
+    rewind: "FICTIONAL: אין אפשרות לחזור אחורה בתמונה."
+  fallback: "FICTIONAL: זה לא משהו שאני יכול לעשות מכאן."
+
+# -----------------------------------------------------------------------------
+# HANDOVER — no rotation is authored in this 3-minute timeline.
+# -----------------------------------------------------------------------------
+handover:
+  busy_reply: "FICTIONAL: אנחנו בהחלפת צוותים, חוזר אליך בקרוב."
+  allow_urgent: true
+
+# -----------------------------------------------------------------------------
+# THE OTHER TWO SOURCES
+# -----------------------------------------------------------------------------
+# crew-handover.md is omitted: no rotation is authored in three minutes.
+context_files:
+  - roles-and-authority.md
+  - communication.md
+  - briefing-norms.md
+  - mission-workflow.md
+  - examples.md
+
+# Which recording this exercise accompanies. Bare filename in timelines/.
+timeline_file: lebanon_vehicle.csv
+
+# -----------------------------------------------------------------------------
+# PRIVATE — author and debrief only. NEVER reaches the operator.
+# -----------------------------------------------------------------------------
+private:
+  visible_to_operator: false     # must stay false; validated at load
+  solution: |
+    FICTIONAL. אדם יוצא מהמבנה, נכנס לרכב ויוצא לדרך.
+    התמונה עוברת למעקב אחרי הרכב בדקה 1:15 — זה אירוע מתוכנן בהקלטה
+    ולא תגובה לבקשה של המתאמן.
+    בין 2:05 ל-2:20 עצים מסתירים את הרכב. אחרי ההסתרה נראה רכב
+    שמתאים בצורתו ובצבעו — אין בהקלטה הוכחה לרציפות הזיהוי.
+    התרגיל נגמר כשהרכב עוצר, בלי שנראתה יציאה ממנו.
+  teaching_points: |
+    FICTIONAL.
+    1. האם המתאמן ביקש תמונת בסיס לפני שמשהו קרה.
+    2. האם הבחין שמעבר המעקב אינו משהו שהוא ביקש או יכול לשנות.
+    3. האם קיבל את "אותו רכב" כוודאות, או הבחין שההסתרה שוברת את הרציפות.
+    4. האם ביקש דיווח יזום על עצירה או המתין.
+    5. האם ניסה לבקש זום או הזזת מצלמה, ומה עשה עם התשובה.

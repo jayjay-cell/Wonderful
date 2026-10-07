@@ -16,7 +16,7 @@ import pytest
 from core.lifecycle import Phase
 from core.timeline import Priority
 from sim.exercise import Exercise, Utterance
-from tests.fakes import FailingModel, ScriptedModel
+from tests.fakes import ScriptedModel
 
 
 # =========================================================================
@@ -1164,12 +1164,12 @@ class TestAgreementPersistence:
         clock.set(100.0)
         exercise.ledger.register(exercise.timeline, at=100.0,
                                  tags=["vehicle"], description="כל רכב")
-        session._persist_new_agreements()
+        session.recorder.agreements()
         assert [a["status"] for a in store.agreements(exercise.session_id)] \
             == ["active"]
 
         exercise.ledger.cancel_all()
-        session._persist_new_agreements()
+        session.recorder.agreements()
         statuses = [a["status"] for a in store.agreements(exercise.session_id)]
         assert "cancelled" in statuses
 
@@ -1193,7 +1193,7 @@ class TestAgreementPersistence:
         clock.set(700.0)
         exercise.advance()
         exercise.claim_report()          # triggers the stale drop
-        session._persist_dropped()
+        session.recorder.dropped_reports()
 
         rows = store.revealed(exercise.session_id)
         assert any(r["event_id"] == "veh3" and r["disposition"] == "stale"
@@ -1234,7 +1234,7 @@ class TestBriefingTransition:
 
 
 class TestElevenLabsIsGone:
-    """The cascade path is removed, not merely unused."""
+    """The ElevenLabs path is removed, not merely unused."""
 
     def test_no_production_module_references_elevenlabs(self) -> None:
         """A leftover import would break a clean install.
@@ -1295,3 +1295,345 @@ class TestElevenLabsIsGone:
         assert values
         for value in values:
             StartSessionRequest(mission_file="m.yaml", channel=value)
+
+
+# =========================================================================
+# 14. One recording path, shared by every channel
+# =========================================================================
+
+
+class TestOneRecordingPath:
+    """Persistence has a single owner.
+
+    Previously `Session` and `api/live_voice.py` each wrote to the store
+    directly, with different field choices, so a voice transcript did not
+    hold the same information as a text one. The trainee's own
+    transmission also bypassed `record_utterance`, so it never reached
+    conversation state or the channel renderer.
+    """
+
+    def _session(self, exercise, channel="text"):
+        """A Session with an in-memory store, ready to record."""
+        from api.store import SqliteSessionStore
+        from sim.session import Session
+        from sim.turns import TurnRunner
+
+        store = SqliteSessionStore(":memory:")
+        store.create_session(exercise.session_id, "m", 1,
+                             "2026-01-01T00:00:00Z", channel=channel)
+        return Session(exercise, TurnRunner(exercise, ScriptedModel()),
+                       store=store, channel=channel)
+
+    def test_no_channel_writes_to_the_store_directly(self) -> None:
+        """Only the recorder touches the store."""
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        for name in ("api/live_voice.py", "sim/session.py", "sim/exercise.py",
+                     "sim/turns.py"):
+            text = (root / name).read_text(encoding="utf-8")
+            for write in ("store.add_utterance", "store.add_revealed",
+                          "store.add_agreement", "store.set_status"):
+                assert write not in text, f"{name} writes {write} directly"
+
+    def test_trainee_speech_reaches_state_store_and_renderer(
+        self, exercise, clock
+    ) -> None:
+        """One call updates all three, so none can drift from the others."""
+        seen = []
+        session = self._session(exercise)
+        session.on_utterance = seen.append
+
+        clock.set(100.0)
+        session.record_trainee("גלוק, מדבקה, דווח מצב")
+
+        assert exercise.state.contact_established          # state
+        assert len(exercise.log.utterances) == 1           # exercise log
+        rows = session.recorder.store.transcript(exercise.session_id)
+        assert [r["speaker"] for r in rows] == ["trainee"]  # store
+        assert len(seen) == 1                              # renderer
+
+    def test_operator_speech_from_a_voice_channel_is_recorded_alike(
+        self, exercise, clock
+    ) -> None:
+        """Gemini Live transcribes its own audio, so it records through
+        record_operator rather than a TurnResult -- but lands identically."""
+        session = self._session(exercise, channel="gemini_live")
+        clock.set(100.0)
+        session.record_operator("מדבקה, גלוק, שומע היטב.")
+
+        rows = session.recorder.store.transcript(exercise.session_id)
+        assert len(rows) == 1
+        assert rows[0]["speaker"] == "operator"
+        # The estimate marker survives, since the model heard its own voice.
+        assert rows[0]["delivery"] == "streamed"
+
+    def test_text_and_voice_differ_only_in_the_delivery_marker(
+        self, exercise, clock
+    ) -> None:
+        """Same fields either way; only the fidelity note changes."""
+        clock.set(100.0)
+        text = self._session(exercise, channel="text")
+        text.record_trainee("בטקסט")
+        assert text.recorder.delivery_kind == "paced"
+
+        voice = self._session(exercise, channel="gemini_live")
+        assert voice.recorder.delivery_kind == "streamed"
+
+    def test_empty_speech_is_never_recorded(self, exercise, clock) -> None:
+        """Whitespace is not an utterance; a blank row would show in a debrief."""
+        session = self._session(exercise)
+        clock.set(100.0)
+        session.record_trainee("   ")
+        session.record_operator("")
+        assert exercise.log.utterances == []
+        assert session.recorder.store.transcript(exercise.session_id) == []
+
+    def test_a_none_store_is_handled_in_one_place(self, exercise, clock) -> None:
+        """Tests and dry runs pass store=None; recording must still work."""
+        from sim.session import Session
+        from sim.turns import TurnRunner
+
+        session = Session(exercise, TurnRunner(exercise, ScriptedModel()))
+        clock.set(100.0)
+        session.record_trainee("ללא אחסון")
+        assert len(exercise.log.utterances) == 1
+
+
+class TestDeadCodeIsGone:
+    """Orphans removed in the simplification pass stay removed."""
+
+    def test_orphan_modules_are_absent(self) -> None:
+        """agent/state.py, sim/turn_detection.py and tools/errors.py had
+        zero references anywhere, tests included."""
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        for name in ("agent/state.py", "sim/turn_detection.py",
+                     "tools/errors.py"):
+            assert not (root / name).exists(), name
+
+    def test_write_only_exercise_surface_is_absent(self) -> None:
+        """set_channel and may_interrupt were never read or called."""
+        from sim.exercise import Exercise
+
+        assert not hasattr(Exercise, "set_channel")
+        assert not hasattr(Exercise, "may_interrupt")
+
+    def test_inert_reporting_setting_is_absent(self) -> None:
+        """allow_urgent_interruption had exactly one reader, and nothing
+        called that reader."""
+        from core.mission import Reporting
+
+        assert "allow_urgent_interruption" not in Reporting.model_fields
+
+
+# =========================================================================
+# 15. The fictional 180-second Lebanon exercise
+# =========================================================================
+
+
+class TestLebanonVehicleExercise:
+    """The 3-minute authored scenario loads, runs and ends correctly.
+
+    Guards the authoring contract, not the prose: duration, time-zero
+    handling, interval expiry, termination, and that no future event or
+    private note can reach a prompt.
+    """
+
+    MISSION = "missions/lebanon_vehicle.yaml"
+    TIMELINE = "timelines/lebanon_vehicle.csv"
+
+    def _loaded(self):
+        """The mission and its timeline, through the real loaders."""
+        from core.mission import load_mission
+        from core.timeline_import import load_timeline
+        return load_mission(self.MISSION), load_timeline(self.TIMELINE)
+
+    def _running(self, clock):
+        """A started exercise at mission time zero."""
+        from pathlib import Path
+        from core.mission import load_context
+        from sim.exercise import Exercise
+
+        mission, timeline = self._loaded()
+        exercise = Exercise(
+            mission, timeline, ScriptedModel(replies=["רות."]),
+            context=load_context(mission.context_files, Path("context")),
+            clock=clock,
+        )
+        exercise.mark_ready()
+        clock.set(0.0)
+        exercise.start()
+        return exercise
+
+    def test_mission_and_timeline_load(self) -> None:
+        """Both files pass the existing loaders with no special casing."""
+        mission, timeline = self._loaded()
+        assert mission.id == "lebanon_vehicle"
+        assert len(timeline) == 10
+
+    def test_duration_is_exactly_180_seconds(self) -> None:
+        """The brief asks for exactly three minutes."""
+        mission, _ = self._loaded()
+        assert mission.duration_seconds == 180
+
+    def test_callsigns_are_the_supplied_ones(self) -> None:
+        """Glok operates; Madbeka is the trainee."""
+        mission, _ = self._loaded()
+        assert mission.callsigns.operator == "גלוק"
+        assert mission.callsigns.trainee == "מדבקה"
+
+    def test_conversation_language_is_hebrew(self) -> None:
+        """Interface is English; the net is Hebrew."""
+        mission, timeline = self._loaded()
+        assert mission.language == "he"
+        for event in timeline:
+            if event.operator_information:
+                assert any("֐" <= c <= "׿"
+                           for c in event.operator_information), event.event_id
+
+    def test_every_event_is_labelled_fictional(self) -> None:
+        """Author-facing descriptions must not read as real material."""
+        _, timeline = self._loaded()
+        for event in timeline:
+            assert "FICTIONAL" in event.description, event.event_id
+
+    def test_opening_picture_is_revealed_once_at_time_zero(self, clock) -> None:
+        """The house and parked vehicle are true from the first second."""
+        exercise = self._running(clock)
+        assert [e.event_id for e in exercise.advance()] == ["house_visible"]
+        assert exercise.advance() == ()
+
+    def test_opening_picture_is_owed_a_report(self, clock) -> None:
+        """A required event at 00:00 must actually be queued."""
+        exercise = self._running(clock)
+        exercise.advance()
+        assert "house_visible" in {r.event.event_id
+                                   for r in exercise.pending_reports()}
+
+    def test_events_reveal_in_authored_order(self, clock) -> None:
+        """Walk the whole recording and check the sequence."""
+        exercise = self._running(clock)
+        seen = []
+        for second in range(0, 180, 5):
+            clock.set(float(second))
+            seen.extend(e.event_id for e in exercise.advance())
+        assert seen == [
+            "house_visible", "person_exits", "person_enters",
+            "vehicle_departs", "view_follows", "junction_right",
+            "trees_occlude", "vehicle_reacquired", "vehicle_slows",
+            "vehicle_stops",
+        ]
+
+    def test_the_view_shift_is_an_authored_event(self, clock) -> None:
+        """Following the vehicle happens because the recording does it, and
+        it changes what the crew can see."""
+        exercise = self._running(clock)
+        clock.set(80.0)
+        exercise.advance()
+        facts = exercise.current_information()
+        assert facts.get("מעקב") == "אחרי הרכב"
+        assert facts.get("מבנה") == "מחוץ לשדה הראייה"
+
+    def test_occlusion_is_current_only_inside_its_window(self, clock) -> None:
+        """Reduced visibility must not be described as current afterwards."""
+        exercise = self._running(clock)
+        clock.set(130.0)                 # inside 125-140
+        exercise.advance()
+        assert exercise.current_information().get("ראות") == "ירודה"
+
+        clock.set(150.0)                 # after it, and after reacquisition
+        exercise.advance()
+        assert exercise.current_information().get("ראות") == "תקינה"
+        stale = {o["event_id"]: o["is_current"]
+                 for o in exercise.revealed_observations()}
+        assert stale["trees_occlude"] is False
+
+    def test_reacquisition_claims_consistency_not_certainty(self) -> None:
+        """The authored text must not assert the same vehicle outright."""
+        _, timeline = self._loaded()
+        event = timeline.event("vehicle_reacquired")
+        assert "מתאים" in event.operator_information
+        assert event.instructions                      # how to answer if pressed
+
+    def test_no_exit_is_observed_before_the_end(self) -> None:
+        """The exercise closes open: the vehicle stops, nothing more."""
+        _, timeline = self._loaded()
+        last = timeline.event("vehicle_stops")
+        assert last.start_time == 175.0
+        assert "לא נראתה יציאה" in last.operator_information
+
+    def test_exercise_ends_at_the_authored_duration(self, clock) -> None:
+        """Automatic termination at exactly 180 seconds."""
+        from core.lifecycle import Phase
+
+        exercise = self._running(clock)
+        clock.set(179.0)
+        exercise.advance()
+        assert exercise.phase is Phase.RUNNING
+
+        clock.set(180.0)
+        exercise.advance()
+        assert exercise.phase is Phase.ENDED
+
+    def test_nothing_is_revealed_after_the_end(self, clock) -> None:
+        """An ended exercise stops entirely."""
+        exercise = self._running(clock)
+        clock.set(180.0)
+        exercise.advance()
+        clock.set(400.0)
+        assert exercise.advance() == ()
+        assert exercise.pending_reports() == ()
+
+    def test_future_events_never_reach_the_prompt(self, clock) -> None:
+        """At 30 seconds, nothing later than person_exits may appear."""
+        from agent.prompts import build_system_prompt
+
+        exercise = self._running(clock)
+        clock.set(30.0)
+        exercise.advance()
+        prompt = build_system_prompt(exercise)
+        for future in ("פונה ימינה", "עצים מסתירים", "נראה שוב",
+                       "הרכב עוצר", "עוזבת את המבנה"):
+            assert future not in prompt, future
+
+    def test_private_notes_never_reach_the_prompt(self, clock) -> None:
+        """The solution and teaching points are author-only."""
+        from agent.prompts import build_system_prompt
+
+        exercise = self._running(clock)
+        clock.set(179.0)
+        exercise.advance()
+        prompt = build_system_prompt(exercise)
+        assert "אירוע מתוכנן בהקלטה" not in prompt
+        assert "teaching" not in prompt.lower()
+
+    def test_the_recording_cannot_be_changed_by_request(self) -> None:
+        """Authored limits tell the crew it cannot zoom, slew or rewind."""
+        mission, _ = self._loaded()
+        limits = " ".join(mission.platform.limitations)
+        assert "זום" in limits
+        assert "אחורה" in limits
+        assert set(mission.impossible_requests.explanations) >= {
+            "zoom", "camera", "altitude", "rewind"}
+
+    def test_no_handover_is_authored(self) -> None:
+        """Out of scope for this task: three minutes, no rotation."""
+        from core.timeline import EventType
+
+        _, timeline = self._loaded()
+        assert not [e for e in timeline if e.event_type is EventType.HANDOVER]
+
+    def test_the_api_lists_it_as_selectable(self) -> None:
+        """The UI builds its dropdown from /missions, so appearing in that
+        listing is what makes it selectable -- no UI change needed."""
+        from api.main import list_missions
+        import asyncio
+
+        missions = asyncio.run(list_missions())["missions"]
+        entry = next((m for m in missions
+                      if m["file"] == "lebanon_vehicle.yaml"), None)
+        assert entry is not None
+        assert entry.get("error") is None
+        assert entry["duration_seconds"] == 180

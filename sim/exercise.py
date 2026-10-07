@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from core.commitments import CommitmentLedger
-from core.conversation_state import BriefingStage, ConversationState
+from core.conversation_state import ConversationState
 from core.lifecycle import ExerciseClock, Phase
 from core.mission import Mission
 from core.timeline import Priority, TimelineEvent, Timeline
@@ -81,7 +81,6 @@ class ExerciseLog:
     utterances: list[Utterance] = field(default_factory=list)
     revealed: list[tuple[float, str]] = field(default_factory=list)
     dropped: list[tuple[float, str, str]] = field(default_factory=list)
-    handover_blocks: int = 0
 
 
 class Exercise:
@@ -129,7 +128,6 @@ class Exercise:
 
         # One utterance at a time, so two reports cannot overlap.
         self._speaking = asyncio.Lock()
-        self._channel: Any = None
         self._agent: Any = None
 
         # Guards against a late provider result arriving after a pause or
@@ -192,10 +190,6 @@ class Exercise:
     def phase(self) -> Phase:
         """The current lifecycle phase, from the clock."""
         return self.clock.phase
-
-    def set_channel(self, channel: Any) -> None:
-        """Attach the delivery channel that will render this exercise's speech."""
-        self._channel = channel
 
     # -- revelation (never blocks) ----------------------------------------
 
@@ -317,7 +311,6 @@ class Exercise:
             if report.event.event_id in self._claimed:
                 continue                     # another delivery has it
             if not self.crew_available(report.priority):
-                self.log.handover_blocks += 1
                 continue                     # deferred, never dropped
             ready.append(report)
 
@@ -348,17 +341,6 @@ class Exercise:
             r for r in self._pending if r.event.event_id != report.event.event_id
         ]
         self.ledger.mark_reported(report.event.event_id)
-
-    def may_interrupt(self, priority: Priority) -> bool:
-        """Whether a report may cut across trainee speech.
-
-        Routine traffic waits. Only an urgent event interrupts, and only
-        if the exercise allows it -- a crew that cuts in routinely is a
-        nuisance rather than a realistic one.
-        """
-        if priority is not Priority.URGENT:
-            return False
-        return self.mission.reporting.allow_urgent_interruption
 
     def record_utterance(self, utterance: Utterance) -> None:
         """Record something actually said.

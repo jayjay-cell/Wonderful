@@ -18,11 +18,10 @@ does call the tool, so the guarantee holds.
 
 WHAT THIS PATH GIVES UP, stated plainly:
 
-  * The realism layer. Gemini Live owns its own prosody and pauses, so
-    core/realism.py's DeliveryPlan is NOT used here. There are no
-    controlled stalls, no marker placement, no state-driven garbling.
-  * Deterministic pacing. Timing is the model's, so it is not
-    reproducible from a seed.
+  * Authored delivery. Prosody, pauses and pacing are the model's, so
+    timing is not reproducible run to run.
+  * Recognition hints. The Live API takes no keyterms, so Hebrew domain
+    vocabulary is not biased toward the mission's own terms.
 
 WHAT IT GAINS:
 
@@ -43,7 +42,7 @@ The browser resamples on playback.
 from __future__ import annotations
 
 import os
-from typing import Any, AsyncIterator
+from typing import Any
 
 from obs.logging import get_logger
 from providers.base import ProviderError

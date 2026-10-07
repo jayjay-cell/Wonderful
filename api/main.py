@@ -86,7 +86,8 @@ class LiveSession:
     """A Session plus the queue its SSE stream drains.
 
     The queue exists because utterances are produced by the session's own
-    loops -- a report can fire with no HTTP request in flight -- and
+    loops -- a r
+    eport can fire with no HTTP request in flight -- and
     consumed by whichever stream is open.
     """
 
