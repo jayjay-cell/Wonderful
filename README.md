@@ -51,7 +51,7 @@ No API key, no network.
 | Source | Form | Holds |
 |---|---|---|
 | **Global context** | `context/*.md` | reusable professional knowledge, shared by every exercise |
-| **Timeline** | `timelines/*.xlsx` | what happens during the recording |
+| **Timeline** | `timelines/*.csv` | what happens during the recording |
 | **Mission state** | `missions/*.yaml` | who, where, how this crew behaves |
 
 A new exercise is a new timeline and a new YAML. No code changes.
@@ -59,7 +59,6 @@ A new exercise is a new timeline and a new YAML. No code changes.
 Full guide: **[docs/AUTHORING.md](docs/AUTHORING.md)**
 
 ```bash
-python timelines/make_template.py     # formatted Excel template
 ```
 
 ---
@@ -103,8 +102,8 @@ the shipped exercise as a structural demonstration.
 
 | | |
 |---|---|
-| [docs/AUTHORING.md](docs/AUTHORING.md) | how to author the three inputs |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | how it works and why |
+| [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) | **start here** — the code, the flows, the objects |
+| [docs/AUTHORING.md](docs/AUTHORING.md) | how to write a new exercise |
 
 ## Name
 

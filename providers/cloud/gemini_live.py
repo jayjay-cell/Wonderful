@@ -31,7 +31,7 @@ WHAT IT GAINS:
 
 Both paths therefore stay in the codebase. This is the honest comparison
 the architecture was meant to permit, not a replacement: see
-docs/ARCHITECTURE.md "Channels" for the voice decision and its limits.
+docs/DEVELOPER_GUIDE.md for the voice decision and its limits.
 
 AUDIO FORMATS, which differ per direction and are easy to get wrong:
     input   16 kHz, 16-bit PCM, mono

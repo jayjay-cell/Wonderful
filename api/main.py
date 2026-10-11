@@ -17,15 +17,15 @@ mission time and the exercise would already be out of step with the video
 before the trainer pressed play.
 
 ONE DOMAIN LOOP PER SESSION. The Session owns it; a voice socket attaches
-a channel rather than starting its own. The previous version let the SSE
-stream and the Gemini Live bridge each run a trigger loop against one
-engine, so a once-only event could fire twice.
+a channel rather than starting its own. Two loops against one engine make
+a once-only event fire twice, so nothing here starts its own.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -75,7 +75,9 @@ MISSIONS = ROOT / "missions"
 TIMELINES = ROOT / "timelines"
 CONTEXT = ROOT / "context"
 
-store = SqliteSessionStore()
+# MASLUL_DB_PATH relocates the database; the default sits beside the code.
+store = SqliteSessionStore(os.environ.get("MASLUL_DB_PATH", "").strip()
+                           or "./maslul.db")
 
 # Live sessions, in memory. Documented prototype limitation: a process
 # restart ends any running exercise.
@@ -309,8 +311,8 @@ async def share_context(session_id: str,
 async def stream(session_id: str) -> StreamingResponse:
     """SSE stream of utterances and lifecycle events.
 
-    Does NOT start a domain loop -- the Session owns that, and starting
-    one here is how the previous version ended up with two.
+    Does NOT start a domain loop -- the Session owns that. Starting one
+    here would give the exercise two, and fire each report twice.
     """
     live = _live(session_id)
 

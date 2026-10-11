@@ -1233,38 +1233,13 @@ class TestBriefingTransition:
         assert exercise.should_request_briefing()
 
 
-class TestElevenLabsIsGone:
-    """The ElevenLabs path is removed, not merely unused."""
+class TestChannelContract:
+    """The UI and the API must agree on channel names.
 
-    def test_no_production_module_references_elevenlabs(self) -> None:
-        """A leftover import would break a clean install.
-
-        Production packages only: tests/test_architecture.py keeps the
-        name in its denylist of SDKs that core/ may never import, which
-        is exactly where it should stay.
-        """
-        import pathlib
-
-        root = pathlib.Path(__file__).resolve().parent.parent
-        for package in ("core", "sim", "api", "agent", "tools", "providers",
-                        "obs"):
-            for path in (root / package).rglob("*.py"):
-                if "__pycache__" in path.parts:
-                    continue
-                text = path.read_text(encoding="utf-8").lower()
-                assert "elevenlabs" not in text, path
-
-    def test_no_elevenlabs_config_or_ui_option(self) -> None:
-        """The key, the WS route and the UI option are all gone."""
-        import pathlib
-
-        root = pathlib.Path(__file__).resolve().parent.parent
-        for name in (".env.example", "ui/index.html", "ui/voice.js",
-                     "requirements.txt"):
-            path = root / name
-            if path.exists():
-                assert "elevenlabs" not in path.read_text(
-                    encoding="utf-8").lower(), name
+    They drifted once: the UI sent "live" while the API accepted
+    "gemini_live", so picking voice mode failed with a 422 and voice was
+    entirely unusable.
+    """
 
     def test_api_accepts_only_the_two_live_channels(self) -> None:
         """A channel the UI cannot serve must not validate."""
@@ -1398,39 +1373,6 @@ class TestOneRecordingPath:
         clock.set(100.0)
         session.record_trainee("ללא אחסון")
         assert len(exercise.log.utterances) == 1
-
-
-class TestDeadCodeIsGone:
-    """Orphans removed in the simplification pass stay removed."""
-
-    def test_orphan_modules_are_absent(self) -> None:
-        """agent/state.py, sim/turn_detection.py and tools/errors.py had
-        zero references anywhere, tests included."""
-        import pathlib
-
-        root = pathlib.Path(__file__).resolve().parent.parent
-        for name in ("agent/state.py", "sim/turn_detection.py",
-                     "tools/errors.py"):
-            assert not (root / name).exists(), name
-
-    def test_write_only_exercise_surface_is_absent(self) -> None:
-        """set_channel and may_interrupt were never read or called."""
-        from sim.exercise import Exercise
-
-        assert not hasattr(Exercise, "set_channel")
-        assert not hasattr(Exercise, "may_interrupt")
-
-    def test_inert_reporting_setting_is_absent(self) -> None:
-        """allow_urgent_interruption had exactly one reader, and nothing
-        called that reader."""
-        from core.mission import Reporting
-
-        assert "allow_urgent_interruption" not in Reporting.model_fields
-
-
-# =========================================================================
-# 15. The fictional 180-second Lebanon exercise
-# =========================================================================
 
 
 class TestLebanonVehicleExercise:

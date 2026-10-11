@@ -9,7 +9,7 @@ langchain is 1.4.0, where the constructor is:
 The airport project at C:\\dev\\Wonderful Airport Investment Intelligence
 Agent uses `create_react_agent(prompt=...)` from langgraph.prebuilt, which
 is DEPRECATED here and raises TypeError on the `prompt=` kwarg. Verified by
-introspection; see docs/ARCHITECTURE.md §9. Re-check `pip show langchain`
+introspection. Re-check `pip show langchain`
 before changing any of this.
 
 Three mandated behaviours are native middleware in this version, so they

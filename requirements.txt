@@ -1,5 +1,11 @@
 # Maslul dependencies.
 #
+#     pip install -r requirements.txt
+#
+# langchain renamed the agent constructor between 0.x and 1.x, so the
+# lower bounds matter: run `pip show langchain` before assuming an API
+# shape you saw in another project.
+#
 # AIR-GAP NOTE: the deployment target has no internet. To prepare an
 # offline install, run this on a connected machine:
 #
@@ -8,51 +14,29 @@
 # then carry vendor/ across and install with no package index:
 #
 #     pip install --no-index --find-links vendor/ -r requirements.txt
-#
-# Versions are pinned with lower bounds that reflect what was VERIFIED on
-# the development machine (see docs/ARCHITECTURE.md §9). langchain moves
-# fast and renamed the agent constructor between 0.x and 1.x -- re-check
-# `pip show langchain` before assuming an API shape from another project.
 
-# --- Core engine (steps 1-2): no LLM, no network ---
-pydantic>=2.9
-PyYAML>=6.0
-python-dotenv>=1.0
+# --- Core engine: no model, no network ---
+pydantic>=2.9                    # mission file validation
+PyYAML>=6.0                      # mission files
+python-dotenv>=1.0               # reads .env
 
-# --- Agent loop (step 3) ---
-langchain>=1.4            # create_agent + middleware; NOT 0.x's create_react_agent
+# --- Agent ---
+langchain>=1.4                   # create_agent + middleware, NOT 0.x's create_react_agent
 langchain-core>=1.0
 langgraph>=1.2
 typing_extensions>=4.12
 
-# --- Timeline authoring ---
-openpyxl>=3.1                    # .xlsx timelines (core/timeline_import.py)
-
-# --- API (step 6) ---
+# --- Web server (also serves ui/) ---
 fastapi>=0.115
 uvicorn[standard]>=0.32
 
-# --- Cloud providers ---
-# Required for the current cloud MVP: Gemini for text turns, google-genai
-# for the Live voice session.
-#
-# These were previously marked `; extra == "cloud"`. That is NOT a valid
-# marker in a plain requirements file -- pip evaluates `extra` as empty
-# outside package metadata, so BOTH lines were silently skipped and a
-# clean install produced an app that could not answer at all.
-#
-# providers/cloud/* still imports them lazily, so an air-gapped install
-# that strips this section and selects LLM_PROVIDER=ollama keeps working.
-langchain-google-genai>=4.4      # text turns (Gemini)
-google-genai>=1.0                # Gemini Live speech-to-speech
+# --- Gemini ---
+# Imported lazily inside providers/cloud/, so core/ and sim/ still import
+# without them. An air-gapped install drops this section and adds a local
+# provider instead.
+langchain-google-genai>=4.4      # text turns
+google-genai>=1.0                # Live voice (speech-to-speech)
 websockets>=13.0                 # Live transport
-
-# Optional alternative text provider; select with LLM_PROVIDER=anthropic.
-langchain-anthropic>=1.7
-
-# --- Local providers (step 7) ---
-# Ollama is reached over plain HTTP on localhost, so it needs no SDK.
-httpx>=0.27
 
 # --- Tests ---
 pytest>=8.0

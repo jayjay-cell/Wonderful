@@ -1,13 +1,10 @@
 """The shared session layer: lifecycle, the domain loop, persistence.
 
-EVERY CHANNEL DRIVES THIS. Text and Gemini Live
-differ only in how audio moves; timeline, facts, commitments, handover,
-lifecycle and persistence all live here. The previous version let
-api/live_voice.py reimplement the domain layer, which silently lost two
-procedure rules and a whole tool, and ran a second trigger loop that
-double-counted every event.
+EVERY CHANNEL DRIVES THIS. Text and Gemini Live differ only in how audio
+moves; timeline, facts, commitments, handover, lifecycle and persistence
+all live here.
 
-The loop is split, which is the point of the refactor:
+THE LOOP IS SPLIT, and that split is the core design decision:
 
     _reveal_loop   runs advance() every TICK_SECONDS. No awaits on the
                    model or the speaker, so timeline revelation cannot be

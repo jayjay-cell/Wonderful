@@ -2,20 +2,15 @@
 
 Pure apart from reading YAML and Markdown.
 
-WHAT THIS IS NOT ANY MORE. The previous version declared mutable
-parameters with physical dynamics -- fuel draining, altitude climbing
-toward a commanded target -- because the product was understood as a
-flight simulator. It is not. The recording is immutable, so there is
-nothing to simulate: there are authored INITIAL FACTS, and the timeline
-updates them as the exercise unfolds.
-
-So `parameters` with `dynamics` is gone, and with it the idea that a
-trainee's instruction changes the world.
+NOTHING HERE IS SIMULATED. The recording is immutable, so there are no
+mutable parameters and no physics: a mission declares authored INITIAL
+FACTS, and the timeline updates them as the exercise unfolds. A trainee's
+instruction never changes the world.
 
 THREE AUTHORED SOURCES, and this is the third:
 
   context/*.md      reusable professional knowledge, shared by exercises
-  timeline .xlsx    what happens during the recording
+  timeline .csv     what happens during the recording
   missions/*.yaml   THIS FILE -- who, where, and how this exercise behaves
 
 Validation fails loudly. An exercise that loaded with a dangling reference

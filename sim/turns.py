@@ -1,10 +1,8 @@
 """Running one turn: the agent, its tools, and what was actually said.
 
 Sits between Exercise (which owns facts and timing) and the channels
-(which own audio). Every channel drives this, so domain behaviour cannot
-diverge between text and Gemini Live -- the
-previous version had the Live path reimplementing turns, and it silently
-lost two procedure rules and a whole tool.
+(which own audio), so domain behaviour cannot diverge between text and
+voice.
 
 A turn can fail. A provider outage, a step limit, or a pause mid-flight
 all produce a safe outcome rather than an exception: the exercise

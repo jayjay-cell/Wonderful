@@ -1,16 +1,10 @@
 """System prompt: global context + mission metadata + revealed facts +
 conversation state.
 
-WHAT WAS REMOVED AND WHY. The previous version asserted operational
-doctrine that had been invented rather than supplied: a blanket "open
-every transmission with callsigns" rule, a brevity vocabulary,
-transmission formats, and "call read_state before every number" stated in
-four separate places. One piece actively contradicted the code -- the
-prompt demanded callsigns on every line while the checker enforced them
-only on the first.
-
-Doctrine now lives in context/*.md, which the user owns and can correct
-once, for every exercise. This module composes; it does not legislate.
+THIS MODULE COMPOSES; IT DOES NOT LEGISLATE. Operational doctrine lives
+in context/*.md, which the training staff own and can correct once for
+every exercise. Do not add a radio convention or a brevity term here --
+if it is not in the authored context, we are inventing it.
 
 PRECEDENCE, in one place so it cannot drift into contradiction:
 

@@ -4,15 +4,10 @@ Single trainer, single process: SQLite needs no service to install, and
 Redis or Postgres would be unjustified. The repository interface keeps a
 later swap additive.
 
-WHAT CHANGED AND WHY IT MATTERED. The previous version was written only
-from api/main.py, so neither voice path persisted anything: a Gemini Live
-session left no transcript at all, and the voice path received an
-utterance record and dropped it. `GET /review` returned an empty
-transcript for every voice session, which made them undebriefable --
-exactly the thing a training tool exists to support.
-
-Persistence now hangs off the shared session layer, so all three channels
-record the same way.
+ONE WRITER. Every row here comes from sim/recorder.py, which the Session
+owns. Channels record events; they never write rows themselves, so a
+voice session and a text session hold the same fields and both can be
+debriefed. A test fails if any channel calls `store.add_*` directly.
 
 HONEST LIMIT ON NATIVE STREAMING VOICE. With Gemini Live the model
 generates audio directly and transcribes its own speech. If the trainee

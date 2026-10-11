@@ -3,14 +3,13 @@
 One model hears and speaks. No separate STT or TTS, and no second vendor
 key -- it uses the GEMINI_API_KEY the text path already needs.
 
-WHAT CHANGED. The previous version reimplemented the domain layer here:
-its own tool shim (which omitted a whole tool and never gave the procedure
-checker its context) and its own trigger loop (which dropped deferral and
-double-counted every event against shared bookkeeping). This file is now a
-TRANSPORT. Facts, commitments, handover, lifecycle and persistence come
-from sim/session.py, exactly as they do for text.
+THIS FILE IS A TRANSPORT. Facts, commitments, handover, lifecycle and
+persistence all come from sim/session.py, exactly as they do for text. If
+you find yourself adding a domain rule here, it belongs in Exercise
+instead -- two copies of a rule is how the voice and text channels drift
+apart.
 
-What it still owns, because it genuinely differs:
+What it does own, because it genuinely differs from text:
 
   * audio framing -- 16 kHz in, 24 kHz out
   * tool execution through the Live API's own function-call protocol

@@ -1,16 +1,13 @@
-"""Load a mission timeline from .xlsx or .csv into one internal shape.
+"""Load a mission timeline from CSV into the engine's internal shape.
 
-The author works in Excel, which is the point: a timeline is a table of
-moments, and a spreadsheet is the right tool for that. Both formats
-normalize to the same rows so nothing downstream knows or cares which was
-used.
+A timeline is a table of moments, so it is authored in a spreadsheet and
+exported as CSV. CSV rather than .xlsx on purpose: it diffs in git, so a
+reviewer can see exactly which beat of an exercise changed.
 
 VALIDATION FAILS LOUDLY, BEFORE THE EXERCISE STARTS. A timeline that
 loaded with a silently-dropped row would run an exercise missing a beat
 the author believed was there, and the trainee would be assessed on it.
-Every error names the sheet row so a typo takes seconds to find.
-
-Only `openpyxl` is required, and it was already a dependency.
+Every error names the row so a typo takes seconds to find.
 """
 
 from __future__ import annotations
@@ -45,57 +42,23 @@ class TimelineError(Exception):
 
 
 def load_timeline(path: str | Path) -> Timeline:
-    """Load and validate a timeline from .xlsx or .csv."""
+    """Load and validate a timeline CSV."""
     path = Path(path)
     if not path.exists():
         raise TimelineError(f"no such file: {path}")
-
-    suffix = path.suffix.lower()
-    if suffix in {".xlsx", ".xlsm"}:
-        rows = _read_xlsx(path)
-    elif suffix in {".csv", ".tsv"}:
-        rows = _read_csv(path)
-    else:
+    if path.suffix.lower() not in {".csv", ".tsv"}:
         raise TimelineError(
-            f"unsupported format {suffix!r}; use .xlsx or .csv", source=path
+            f"unsupported format {path.suffix!r}; export the sheet as CSV",
+            source=path,
         )
 
+    rows = _read_csv(path)
     events = [_to_event(row, index, path) for index, row in rows]
     _check_cross_row(events, path)
     return Timeline(events)
 
 
 # -- readers ---------------------------------------------------------------
-
-
-def _read_xlsx(path: Path) -> list[tuple[int, dict[str, Any]]]:
-    """Read an Excel sheet into (row number, row) pairs."""
-    try:
-        from openpyxl import load_workbook
-    except ImportError as err:                      # pragma: no cover
-        raise TimelineError(
-            "openpyxl is required to read .xlsx; install it or export to CSV"
-        ) from err
-
-    # data_only so a formula cell yields its computed value rather than
-    # "=A1*60", which an author would reasonably expect to work.
-    workbook = load_workbook(path, data_only=True, read_only=True)
-    sheet = workbook.active
-    rows = list(sheet.iter_rows(values_only=True))
-    workbook.close()
-
-    if not rows:
-        raise TimelineError("file is empty", source=path)
-
-    header = [_norm_header(c) for c in rows[0]]
-    _check_header(header, path)
-
-    out: list[tuple[int, dict[str, Any]]] = []
-    for offset, raw in enumerate(rows[1:], start=2):
-        if _is_not_data(header, raw):
-            continue
-        out.append((offset, dict(zip(header, raw))))
-    return out
 
 
 def _read_csv(path: Path) -> list[tuple[int, dict[str, Any]]]:

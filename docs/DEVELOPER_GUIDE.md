@@ -28,11 +28,37 @@ Two other entry points exist:
 | Command | Purpose |
 |---|---|
 | `python -m sim.cli --mission missions/<m>.yaml` | Validate the three sources with no model and no API key |
-| `python timelines/make_template.py` | Generate a formatted .xlsx timeline template |
+| `python -m pytest` | 149 tests, no API key, ~3 seconds |
 
 ---
 
-## 2. Folder map
+## 2. The one structural decision to understand first
+
+**Revelation and delivery are separate.**
+
+```
+Exercise.advance()    pure bookkeeping. Reveals events, queues reports.
+                      No awaits at all. Runs every 250ms.
+Session._speak_loop   takes one owed report and says it. Blocks for
+                      seconds on the model.
+```
+
+An event becomes known at its authored time even while the operator is
+mid-transmission or the trainee is talking. Only the *report* waits.
+
+If one loop did both, a 4-second model call would stall the timeline — but
+the video playing beside it would not stall, so the two would drift apart
+for the rest of the exercise. A test runs a deliberately slow model
+concurrently with the clock and asserts events still appear, so the
+coupling cannot come back by accident.
+
+A queued report is re-checked for relevance at delivery and marked
+reported only once it actually was: a pause or interruption retries it
+rather than silently counting it done.
+
+---
+
+## 3. Folder map
 
 ```
 run.py                   entry point; port guard, then uvicorn
@@ -53,7 +79,7 @@ sim/
   cli.py                 model-free validation
 core/                    PURE: no model, no network, no I/O, no framework
   timeline.py            what is revealed/current at time T
-  timeline_import.py     .xlsx/.csv → normalized rows
+  timeline_import.py     CSV → validated events
   commitments.py         reporting agreements and their matching
   conversation_state.py  contact, briefing, addressing
   lifecycle.py           the phase machine and real mission time
@@ -65,7 +91,7 @@ tools/mission_tools.py   what the model may call: read facts, manage agreements
 providers/               swappable model backends (cloud now, local later)
 obs/logging.py           structured logging with a field allow-list
 missions/*.yaml          per-exercise configuration
-timelines/*.csv|xlsx     what happens during each recording
+timelines/*.csv          what happens during each recording
 context/*.md             reusable professional doctrine, shared across exercises
 ```
 
@@ -81,7 +107,7 @@ local model. Leave it.
 
 ---
 
-## 3. The main objects and who owns them
+## 4. The main objects and who owns them
 
 ```
 api/main.py  _sessions: dict[session_id → LiveSession]        ← process-wide
@@ -114,7 +140,7 @@ Rules worth knowing before you change anything:
 
 ---
 
-## 4. The flows
+## 5. The flows
 
 ### Prepare — `POST /sessions`
 Loads the mission, timeline and context; builds `Exercise`, `TurnRunner`,
@@ -182,7 +208,7 @@ Cancels both loops, persists the final status, and refuses further turns.
 
 ---
 
-## 5. Where state lives
+## 6. Where state lives
 
 **In memory, for the running exercise:**
 
@@ -213,12 +239,12 @@ never heard.
 
 ---
 
-## 6. The three authored sources
+## 7. The three authored sources
 
 | Source | Answers |
 |---|---|
 | `context/*.md` | How people on this net behave — shared across exercises |
-| `timelines/*.csv\|xlsx` | What happens in this recording, and when |
+| `timelines/*.csv` | What happens in this recording, and when |
 | `missions/*.yaml` | Who is on the net, what the crew knows, how it behaves |
 
 **The full timeline never enters a prompt.** `agent/prompts.py` reads only
@@ -229,3 +255,69 @@ events, author descriptions and private notes cannot leak. See
 ⚠ Everything in `missions/`, `timelines/` and `context/` is **synthetic or
 fictional** training material, apart from the callsigns גלוק / מדבקה /
 משנה. None of it is validated professional doctrine.
+
+---
+
+## 8. How the prompt is composed
+
+`agent/prompts.py` assembles ~15k characters fresh every turn, in this
+precedence order — kept in one place so it cannot drift into
+contradiction:
+
+1. identity and hard rules (report only what you have, never invent)
+2. global context — `context/*.md`, verbatim
+3. mission metadata — crew, setting, platform limits
+4. live state — revealed facts, addressing, crew availability
+5. author overrides — last, so a mission file can countermand the above
+
+One technique recurs: **code decides, the prompt states the answer.**
+Rather than telling the model "use callsigns if 30 seconds have passed",
+`_addressing()` computes it and the prompt says this transmission needs
+callsigns, or does not. Models drop conditional rules under pressure.
+
+The system prompt is passed fresh on every call and never stored in
+message history.
+
+---
+
+## 9. Deliberately not here
+
+No video player, vision model, controller persona, scenario editor,
+automatic grading, microservices, multi-user auth, RAG, or simulator
+framework. Single-trainer prototype.
+
+The product is a conversation counterpart. Scope creep toward "simulator
+framework" is the main architectural risk — it already happened once, and
+the mutable-world-model version had to be deleted.
+
+Local speech and air-gap proof are deferred. `providers/` is the seam:
+adding a local model is one new file plus one branch in
+`build_llm_provider`.
+
+---
+
+## 10. Known limitations
+
+| Limitation | Detail |
+|---|---|
+| Sessions live in memory | A process restart ends every running exercise |
+| No authentication | Single-trainer prototype |
+| All content is synthetic | Everything in `missions/`, `timelines/`, `context/` is invented except the callsigns גלוק / מדבקה / משנה |
+| Agreement registration is probabilistic | The model may answer "רות" without calling `agree_to_report`. **Trust the ledger, not the transcript** |
+| Voice prosody is not authorable | Gemini Live owns its own pacing |
+| No recognition hints in voice | The Live API takes no keyterms, so Hebrew brevity terms are not biased |
+
+Behaviour numbers — the 30-second re-addressing threshold, the 0.0–1.0
+behaviour dials — are initial tuning defaults, not validated rules.
+
+---
+
+## 11. Verified environment
+
+- Python 3.12.10, `langchain` 1.4.0, `langgraph` 1.2.11
+- `create_agent(..., system_prompt=...)`; `create_react_agent(prompt=...)`
+  is deprecated here
+- Middleware: `ModelCallLimitMiddleware(run_limit, exit_behavior="end")`,
+  `ToolErrorMiddleware`
+
+Re-check with `pip show langchain` before changing the agent layer.

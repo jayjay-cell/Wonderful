@@ -1,4 +1,4 @@
-"""Provider interfaces -- THE AIR-GAP SEAM (docs/ARCHITECTURE.md §4).
+"""Provider interfaces -- THE AIR-GAP SEAM.
 
 Every external dependency the system has -- currently the language model
 -- is reached only through this protocol. Speech needs no protocol here:
@@ -92,13 +92,8 @@ def build_llm_provider(name: str | None = None) -> LLMProvider:
     if name == "gemini":
         from providers.cloud.gemini import GeminiProvider
         return GeminiProvider()
-    if name == "anthropic":
-        from providers.cloud.anthropic import AnthropicProvider
-        return AnthropicProvider()
-    if name == "ollama":
-        from providers.local.ollama import OllamaProvider
-        return OllamaProvider()
 
-    raise ProviderError(
-        f"unknown LLM_PROVIDER {name!r}; expected one of: gemini, anthropic, ollama"
-    )
+    # Only one provider ships today. The branch above is the seam: adding a
+    # local model for an air-gapped install means one new file in
+    # providers/ and one more branch here, with nothing else touched.
+    raise ProviderError(f"unknown LLM_PROVIDER {name!r}; expected: gemini")

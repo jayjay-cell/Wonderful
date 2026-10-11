@@ -4,7 +4,7 @@ An exercise is **three files**. No code changes.
 
 ```
 context/*.md              reusable professional knowledge, shared by all exercises
-timelines/<name>.xlsx     what happens during the recording
+timelines/<name>.csv      what happens during the recording
 missions/<name>.yaml      who, where, and how this crew behaves
 ```
 
@@ -41,17 +41,17 @@ will imitate an unmarked bad example.
 
 ---
 
-## 2. Timeline — Excel or CSV
+## 2. Timeline — CSV
 
-Generate a formatted template:
+Start by copying an existing one:
 
 ```bash
-python timelines/make_template.py
+cp timelines/lebanon_vehicle.csv timelines/my_exercise.csv
 ```
 
-It opens with the columns, hover notes on each, and example rows to edit
-over. Each column note explains what the field does, so the guidance is
-where you are working rather than in a separate document.
+Author it in a spreadsheet and export as CSV. CSV rather than .xlsx on
+purpose: it diffs in git, so a reviewer can see which beat of an exercise
+changed.
 
 ### Columns
 
@@ -170,7 +170,7 @@ private:                         # NEVER reaches the operator
   debrief_points: ["..."]
 
 context_files: [roles-and-authority.md, communication.md, ...]
-timeline_file: my_exercise.xlsx
+timeline_file: my_exercise.csv
 ```
 
 ### Behaviour dials

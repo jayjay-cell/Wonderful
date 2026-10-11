@@ -1,14 +1,9 @@
 """The one place exercise history is written to the store.
 
-WHY THIS FILE EXISTS. Persistence used to live in two places: `Session`
-wrote utterances, reveals and agreements, while `api/live_voice.py` wrote
-its own utterances and reveals directly -- with slightly different field
-choices, so a voice transcript and a text transcript did not record the
-same things. Every call site also repeated `if store is not None`.
-
-So all writes moved here. A channel records an event; it never decides how
-that event is stored. The `None` store (tests, a dry run) is handled once,
-in one place.
+WHY THIS FILE EXISTS. All database writes for an exercise live here, so a
+channel records an event and never decides how it is stored. That is what
+keeps a voice transcript and a text transcript holding the same fields.
+The `None` store (tests, a dry run) is handled once, in one place.
 
 Deduplication also lives here, because it is a storage concern: an event
 revealed on one tick must not be written again on the next, and an
